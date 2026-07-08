@@ -1,0 +1,97 @@
+---
+description: NestJS test file conventions — location, structure, aliases, and mock boundaries for this project
+globs: apps/server/**/*.ts
+alwaysApply: false
+---
+
+# NestJS Test Conventions
+
+## File Location
+
+Unit test specs live in `apps/server/test/<module>/`, NOT next to source files.
+
+```
+src/users/repository/users.repository.ts       ← source
+test/users/repository/users.repository.spec.ts ← test (not src/users/)
+```
+
+## Import Aliases
+
+Always use `@/` (maps to `src/`) — never relative paths.
+
+```typescript
+// ✅ GOOD
+import { UsersRepository } from '@/users/repository/users.repository';
+import { PrismaService } from '@/prisma/prisma.service';
+
+// ❌ BAD
+import { UsersRepository } from '../users/repository/users.repository';
+import { PrismaService } from 'src/prisma/prisma.service';
+```
+
+## Mock Boundaries
+
+Mock only true boundaries. In a service test, mock the repository. In a repository test, mock `PrismaService`.
+
+```typescript
+// Service spec — mock repository
+const mockRepository: jest.Mocked<UsersRepository> = {
+  findAll: jest.fn(),
+  findOne: jest.fn(),
+  create: jest.fn(),
+  update: jest.fn(),
+} as unknown as jest.Mocked<UsersRepository>;
+
+// Repository spec — mock PrismaService
+const mockPrisma = {
+  user: {
+    findMany: jest.fn(),
+    findUniqueOrThrow: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+  },
+};
+```
+
+## Mock Data
+
+Mock objects must include ALL model fields (including `updatedAt`) to satisfy Prisma-generated types.
+
+```typescript
+const mockUser = {
+  id: 'user-1',
+  email: 'test@example.com',
+  name: 'Test User',
+  role: 'user',
+  createdAt: new Date(),
+  updatedAt: new Date(), // ← required by Prisma model
+};
+```
+
+## Spec Structure
+
+```typescript
+describe('UsersRepository', () => {
+  let repository: UsersRepository;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    repository = new UsersRepository(mockPrisma as unknown as PrismaService);
+  });
+
+  describe('findAll', () => {
+    it('returns users ordered by createdAt desc', async () => { ... });
+  });
+
+  describe('findOne', () => {
+    it('returns a user by id', async () => { ... });
+    it('throws when user is not found', async () => { ... });
+  });
+});
+```
+
+## Minimum Test Cases Per Feature
+
+1. Happy path
+2. Invalid input / guard / not-found case
+3. Dependency failure (for repository tests)

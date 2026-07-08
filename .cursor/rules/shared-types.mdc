@@ -1,0 +1,41 @@
+---
+description: Shared payload and domain types must be defined in @repo/types, not duplicated in apps
+alwaysApply: true
+---
+
+# Shared Types
+
+All payload and domain types shared between the frontend (`apps/web`) and backend (`apps/server`) must be defined in `packages/types/src/` and imported via `@repo/types`.
+
+```typescript
+// ✅ GOOD — defined once in packages/types, consumed by both apps
+import type { User, CreateUserPayload } from '@repo/types';
+
+// ❌ BAD — local type that duplicates a shared contract
+interface CreateUserPayload {
+  email: string;
+  name?: string;
+}
+```
+
+## When to add a type here
+
+- API request/response payloads
+- Shared domain interfaces (e.g. `User`, `Post`)
+- Any type imported by more than one app or package
+
+## When NOT to add it here
+
+- UI-only types (component props, local state shapes)
+- Server-only internals (entity classes, ORM models)
+- Types that are never used outside a single package
+
+## Export pattern
+
+Add the export to `packages/types/src/index.ts`:
+
+```typescript
+export type { User, CreateUserPayload, UpdateUserPayload } from './user';
+```
+
+Then re-run `pnpm build` in the `db` or `types` package if the consuming app can't resolve it.

@@ -1,0 +1,184 @@
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [pgvector(map: "vector")]
+}
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  password  String
+  role      String   @default("user")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Vendors ─────────────────────────────────────────────────────────────────
+
+model Vendor {
+  id        String     @id @default(uuid())
+  name      String
+  contracts Contract[]
+  invoices  Invoice[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+// ─── Contracts ───────────────────────────────────────────────────────────────
+
+// type:   "rate_sheet" | "amendment" | "surcharge" | "other"
+// status: "uploaded" | "parsing" | "parsed" | "review" | "active" | "error"
+model Contract {
+  id              String           @id @default(uuid())
+  vendorId        String
+  vendor          Vendor           @relation(fields: [vendorId], references: [id])
+  name            String
+  type            String           // "rate_sheet" | "amendment" | "surcharge" | "other"
+  fileName        String
+  filePath        String
+  storageKey      String?          // Azure blob key or local relative path
+  processingJobId String?          // BullMQ job ID for tracking
+  status          String           @default("uploaded")
+  extractedText   String?
+  effectiveFrom   DateTime?
+  effectiveTo     DateTime?
+  terms           ContractTerm[]
+  chunks          ContractChunk[]
+  tables          ContractTable[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ContractTerm {
+  id          String   @id @default(uuid())
+  contractId  String
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  termType    String
+  description String
+  route       String?
+  vehicleType String?
+  rate        Float?
+  unit        String?
+  formula     String?
+  conditions  String?
+  confidence  Float    @default(0)
+  status      String   @default("pending")
+  source      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([contractId])
+}
+
+// One chunk per semantic segment of a PDF / text contract.
+model ContractChunk {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  chunkIndex Int
+  content    String
+  embedding  Unsupported("vector(1536)")?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([contractId])
+  @@index([contractId, chunkIndex])
+}
+
+// One record per extracted table (PDF or Excel sheet).
+// Stores the complete table as structured JSON so the agent can load it in one query.
+model ContractTable {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  name     String // Descriptive name inferred by LLM (e.g. "Rate Sheet Budapest Hub")
+  summary  String // 1-2 sentence description for agent context
+  headers  Json   // String[] — column names in order
+  rows     Json   // String[][] — all data rows (parallel to headers)
+  rowCount Int    // Cached for quick display without deserialising rows
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([contractId])
+}
+
+// ─── Invoices ────────────────────────────────────────────────────────────────
+
+// status: "processing" | "audited" | "disputed"
+model Invoice {
+  id          String        @id @default(uuid())
+  vendorId    String
+  vendor      Vendor        @relation(fields: [vendorId], references: [id])
+  invoiceNo   String?
+  filePath    String
+  fileName    String
+  totalAmount Float         @default(0)
+  status      String        @default("processing")
+  lines       InvoiceLine[]
+  auditResult AuditResult?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model InvoiceLine {
+  id              String           @id @default(uuid())
+  invoiceId       String
+  invoice         Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  chargeType      String
+  description     String
+  invoicedAmount  Float
+  auditLineResult AuditLineResult?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([invoiceId])
+}
+
+// ─── Audit ───────────────────────────────────────────────────────────────────
+
+model AuditResult {
+  id            String            @id @default(uuid())
+  invoiceId     String            @unique
+  invoice       Invoice           @relation(fields: [invoiceId], references: [id])
+  invoiceTotal  Float
+  expectedTotal Float
+  variance      Float
+  status        String
+  lineResults   AuditLineResult[]
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+}
+
+model AuditLineResult {
+  id            String      @id @default(uuid())
+  auditResultId String
+  auditResult   AuditResult @relation(fields: [auditResultId], references: [id], onDelete: Cascade)
+  invoiceLineId String      @unique
+  invoiceLine   InvoiceLine @relation(fields: [invoiceLineId], references: [id])
+  chargeType    String
+  description   String
+  invoicedAmount Float
+  expectedAmount Float
+  variance      Float
+  result        String
+  explanation   String
+  evidence      Json
+  matchedTermId String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([auditResultId])
+}

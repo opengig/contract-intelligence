@@ -1,0 +1,62 @@
+name: Deploy Web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - 'packages/**'
+      - '.github/workflows/deploy-web.yml'
+
+env:
+  APP_NAME: contract-web
+  RESOURCE_GROUP: heizen-developers
+  IMAGE_NAME: contract-web
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get ACR login server
+        id: acr
+        run: |
+          ACR_NAME=$(az acr list --resource-group ${{ env.RESOURCE_GROUP }} --query "[0].name" -o tsv)
+          ACR_SERVER=$(az acr show --name $ACR_NAME --query loginServer -o tsv)
+          echo "name=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "server=$ACR_SERVER" >> $GITHUB_OUTPUT
+
+      - name: Log in to ACR
+        run: az acr login --name ${{ steps.acr.outputs.name }}
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE=${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker build \
+            --build-arg NEXT_PUBLIC_API_URL=https://contract-server-argyebh7a0hyfva5.eastus2-01.azurewebsites.net \
+            -f apps/web/Dockerfile \
+            -t $IMAGE .
+          docker push $IMAGE
+          docker tag $IMAGE ${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Deploy to Azure App Service
+        run: |
+          IMAGE=${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          az webapp config container set \
+            --name ${{ env.APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --container-image-name $IMAGE
+
+      - name: Restart App Service
+        run: |
+          az webapp restart \
+            --name ${{ env.APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }}

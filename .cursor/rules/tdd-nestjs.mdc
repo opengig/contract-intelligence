@@ -1,0 +1,66 @@
+---
+description: Strict TDD for NestJS. Write minimal, high-signal tests first, include edge cases, then implement the smallest code needed to pass.
+alwaysApply: false
+---
+# NestJS TDD Rule
+
+Follow strict Test-Driven Development for all NestJS work.
+
+## Core workflow
+- Never start with implementation, ask user always if it wants to work in Test Driven Development way.
+- First list the proposed test cases briefly.
+- Then write failing tests.
+- Then write the smallest implementation needed to pass.
+- Do not refactor unrelated code.
+- Do not add speculative abstractions or future-proofing.
+
+## Test philosophy
+- Tests must be concise, readable, and high-signal.
+- Prefer 3-4 strong tests over many repetitive tests.
+- Every test should verify one meaningful behavior.
+- Cover:
+  - happy path
+  - invalid input
+  - important edge case
+  - dependency failure / exception path when relevant
+- Do not write trivial tests for framework behavior.
+- Do not test private methods directly.
+- Do not use snapshot tests unless explicitly requested.
+- Do not over-mock.
+
+## NestJS preferences
+- Prefer service-level tests over controller tests unless controller behavior itself matters.
+- Mock only real boundaries:
+  - repositories / database
+  - HTTP clients
+  - queues
+  - caches
+  - third-party services
+- Do not mock simple domain logic unnecessarily.
+- Use `TestingModule` only when needed.
+- For exceptions, assert the exact NestJS exception type when relevant.
+- For async methods, use `await expect(...).rejects` / `resolves` properly.
+- For repository tests, mock repository contracts, not ORM internals.
+
+## Minimal test target
+Usually aim for:
+1. one happy path test
+2. one invalid input or failure test
+3. one important edge case
+4. one dependency failure / exception test if relevant
+
+Do not generate 10 tests when 3-4 strong tests are enough.
+
+## Implementation rules
+- After tests are written, implement only enough code to make them pass.
+- Keep implementation explicit, simple, and production-grade.
+- Follow existing project patterns and NestJS conventions.
+- Do not change public interfaces unless required by the tests.
+
+## Output style
+When generating code:
+1. briefly list test cases
+2. write tests
+3. write implementation
+
+Keep both tests and implementation minimal.
