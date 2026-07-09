@@ -149,11 +149,28 @@ export class DeepAgentsService {
           'Returns rows as an array of objects.',
           '',
           'SCHEMA (always double-quote PascalCase table/column names):',
-          '  "Contract": id, name, type, status, "vendorId" (nullable), "clientId" (nullable), "effectiveFrom"',
+          '  "Contract": id, name, type, status, "vendorId" (nullable), "clientId" (nullable), "effectiveFrom", "effectiveTo"',
+          '  "ContractMetadata": id, "contractId" (FK → Contract.id, 1-to-1), "carrierName", "carrierScac",',
+          '    mode (values: "LTL" | "TL" | "air" | "parcel" | "rail" | "ocean" | "intermodal"),',
+          '    shipper, "startDate", "expirationDate", currency, divisions (JSON), "originRegions" (JSON),',
+          '    "destRegions" (JSON), "rateType", "laneCount", "keyTerms" (JSON)',
+          '  NOTE: mode/carrier/shipper live in "ContractMetadata", NOT in "Contract".',
+          '    To filter by mode: JOIN "ContractMetadata" cm ON cm."contractId" = c.id WHERE cm.mode ILIKE \'%LTL%\'',
           '  "ContractTable": id, "contractId", name, summary, headers (JSON), rows (JSON), "rowCount"',
           '  "ContractChunk": id, "contractId", "chunkIndex", content',
           '  "Vendor": id, name',
           '  "Client": id, name',
+          '',
+          'Example — LTL vendors for a client active on a date:',
+          '  SELECT v.name, c.id, c.name, c."effectiveFrom", cm.mode',
+          '  FROM "Contract" c',
+          '  JOIN "Vendor" v ON c."vendorId" = v.id',
+          '  JOIN "Client" cl ON c."clientId" = cl.id',
+          '  JOIN "ContractMetadata" cm ON cm."contractId" = c.id',
+          "  WHERE cl.name ILIKE '%ecolab%'",
+          "  AND cm.mode ILIKE '%LTL%'",
+          '  AND c."effectiveFrom" <= \'2024-06-01\'',
+          '  AND (c."effectiveTo" IS NULL OR c."effectiveTo" >= \'2024-06-01\')',
           '',
           'Example — list all tables for a contract:',
           '  SELECT name, summary, "rowCount" FROM "ContractTable" WHERE "contractId" = \'<id>\'',
@@ -781,15 +798,23 @@ The lane-definition table tells you 0139 = Val de Reuil → Casablanca. Then you
 The database stores contract data in these tables (PostgreSQL, double-quote all names):
 
 \`\`\`
-"Contract"      — id, name, type, status, "vendorId" (nullable), "clientId" (nullable), "effectiveFrom", "effectiveTo"
-"Vendor"        — id, name
-"Client"        — id, name
-"ContractTable" — id, "contractId", name, summary,
-                  headers  JSON   -- array of column name strings, e.g. ["Origin", "Destination", "Rate"]
-                  rows     JSON   -- 2D array of cell values, e.g. [["BOM","DEL",150], ...]
-                  "rowCount" int
-"ContractChunk" — id, "contractId", "chunkIndex", content   -- prose text chunks
-"ContractTerm"  — id, "contractId", termType, description, route, rate, unit, formula, conditions
+"Contract"         — id, name, type ("rate_sheet"|"amendment"|"msa"|"other"), status,
+                     "vendorId" (nullable), "clientId" (nullable), "effectiveFrom", "effectiveTo"
+"Vendor"           — id, name
+"Client"           — id, name
+"ContractMetadata" — id, "contractId" (1-to-1 FK → Contract.id),
+                     "carrierName", "carrierScac",
+                     mode  -- "LTL" | "TL" | "air" | "parcel" | "rail" | "ocean" | "intermodal"
+                     shipper, "startDate", "expirationDate", currency,
+                     divisions JSON, "originRegions" JSON, "destRegions" JSON,
+                     "rateType", "laneCount", "keyTerms" JSON
+                     ⚠️  mode, carrierName, shipper ARE NOT columns on "Contract" — always JOIN this table.
+"ContractTable"    — id, "contractId", name, summary,
+                     headers  JSON   -- array of column name strings, e.g. ["Origin", "Destination", "Rate"]
+                     rows     JSON   -- 2D array of cell values, e.g. [["BOM","DEL",150], ...]
+                     "rowCount" int
+"ContractChunk"    — id, "contractId", "chunkIndex", content   -- prose text chunks
+"ContractTerm"     — id, "contractId", termType, description, route, rate, unit, formula, conditions
 \`\`\`
 
 psycopg2 automatically deserialises the JSON columns — headers and rows come back as Python lists, no json.loads() needed.
@@ -1021,6 +1046,16 @@ When filtering contracts by date (e.g. "active as of 2024-06-01"):
 - A contract is active on date X if: \`"effectiveFrom" <= X AND ("effectiveTo" IS NULL OR "effectiveTo" >= X)\`
 - **NULL effectiveTo means the contract is STILL ACTIVE** (open-ended). NEVER exclude contracts just because effectiveTo is null.
 - Example SQL: \`WHERE "effectiveFrom" <= '2024-06-01' AND ("effectiveTo" IS NULL OR "effectiveTo" >= '2024-06-01')\`
+- **Always use the EXACT date from the user's query in SQL — never approximate or substitute a different date.**
+
+## SUPERSEDED CONTRACT LOGIC — CRITICAL
+
+When multiple contracts from the same vendor cover the same scope (same client, same mode, same type):
+- The one with the **latest \`effectiveFrom\`** is the **current/active** document.
+- Earlier ones are **superseded** — label them clearly as "Superseded by [newer contract name]".
+- NEVER present a superseded document as a valid option alongside the current one without flagging it.
+- Example: if a 2023 LTL amendment and a 2024 LTL amendment both exist for the same vendor+client, the 2024 one is current. The 2023 one only applies to shipments dated before the 2024 effective date.
+- When returning "current pricing", return ONLY the latest — mention the older one only if the user explicitly asks about historical rates.
 
 ## SCOPE AWARENESS — WHEN TO QUERY THE FULL DATABASE
 
@@ -1034,11 +1069,42 @@ For these queries, use runQuery with JOINs to "Client", "Vendor", "ContractMetad
 
 ## DATA QUALITY & REVIEW QUESTIONS
 
-When users ask "which attributes need review" or "what's missing/wrong":
-- Actually CHECK the data using \`runQuery\` — don't just list generic issues.
-- Query for NULL or empty fields: \`SELECT "carrierName", "carrierScac", mode, shipper FROM "ContractMetadata" WHERE "carrierName" IS NULL OR "carrierScac" IS NULL\`
-- Check for duplicate vendor names: \`SELECT name, COUNT(*) FROM "Vendor" GROUP BY name HAVING COUNT(*) > 1\`
-- Report specific contracts with missing data, not generic advice.
+When users ask "which attributes need review" or "what's missing/wrong", run ALL of these checks and report specific findings:
+
+1. **Missing metadata fields** — contracts with no metadata or key fields null:
+\`\`\`sql
+SELECT c.id, c.name, v.name AS vendor, cm."carrierName", cm."carrierScac", cm.mode, cm.shipper
+FROM "Contract" c
+LEFT JOIN "Vendor" v ON c."vendorId" = v.id
+LEFT JOIN "ContractMetadata" cm ON cm."contractId" = c.id
+WHERE c.status IN ('active','review')
+AND (cm.id IS NULL OR cm."carrierScac" IS NULL OR cm.mode IS NULL)
+\`\`\`
+
+2. **Low-confidence extracted terms** — terms the AI was uncertain about:
+\`\`\`sql
+SELECT ct.id, ct.description, ct.confidence, c.name AS contract, v.name AS vendor
+FROM "ContractTerm" ct
+JOIN "Contract" c ON ct."contractId" = c.id
+LEFT JOIN "Vendor" v ON c."vendorId" = v.id
+WHERE ct.confidence < 0.75
+ORDER BY ct.confidence ASC
+LIMIT 20
+\`\`\`
+
+3. **Duplicate vendor aliases** — same carrier under multiple names:
+\`\`\`sql
+SELECT name, COUNT(*) AS count FROM "Vendor" GROUP BY name HAVING COUNT(*) > 1
+\`\`\`
+
+4. **Missing effective dates**:
+\`\`\`sql
+SELECT c.id, c.name, v.name AS vendor FROM "Contract" c
+LEFT JOIN "Vendor" v ON c."vendorId" = v.id
+WHERE c."effectiveFrom" IS NULL AND c.status IN ('active','review')
+\`\`\`
+
+Report each check separately with actual rows found — never give generic advice without running the queries first.
 
 ## OTHER WORKFLOWS
 - Clauses, policies, definitions → \`searchContracts\`
