@@ -11,7 +11,7 @@ export class ContractsRepository {
       orderBy: { createdAt: 'desc' },
       include: {
         vendor: { select: { id: true, name: true } },
-        metadata: { select: { shipper: true } },
+        client: { select: { id: true, name: true } },
         _count: { select: { terms: true } },
       },
     });
@@ -22,6 +22,7 @@ export class ContractsRepository {
       where: { id },
       include: {
         vendor: { select: { id: true, name: true } },
+        client: { select: { id: true, name: true } },
         terms: { orderBy: { createdAt: 'asc' } },
         metadata: true,
       },
@@ -36,7 +37,7 @@ export class ContractsRepository {
   }
 
   async create(data: {
-    vendorId: string;
+    vendorId?: string;
     name: string;
     type: string;
     storageKey: string;
@@ -87,6 +88,10 @@ export class ContractsRepository {
       where: { contractId, status: 'pending' },
       data: { status: 'approved' },
     });
+  }
+
+  async update(id: string, data: { vendorId?: string; clientId?: string; name?: string; type?: string }) {
+    return this.prisma.contract.update({ where: { id }, data });
   }
 
   async delete(id: string) {

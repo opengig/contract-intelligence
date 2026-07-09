@@ -63,6 +63,21 @@ const metadataSchema = z.object({
     .describe(
       'Key contract features like "detention", "fuel surcharge", "temperature controlled", "hazmat"',
     ),
+  contractType: z
+    .enum(['rate_sheet', 'amendment', 'surcharge', 'other'])
+    .describe('The type of this contract document'),
+  vendorMatch: z
+    .string()
+    .nullable()
+    .describe(
+      'The EXACT name from the provided existing vendors list that best matches the carrier in this document. null if no match.',
+    ),
+  clientMatch: z
+    .string()
+    .nullable()
+    .describe(
+      'The EXACT name from the provided existing clients list that best matches the shipper/customer in this document. null if no match.',
+    ),
   summary: z
     .string()
     .describe(
@@ -112,11 +127,22 @@ export class MetadataExtractionService {
       })
       .join('\n\n');
 
+    // Fetch existing vendors and clients for fuzzy matching
+    const [vendors, clients] = await Promise.all([
+      this.prisma.vendor.findMany({ select: { id: true, name: true } }),
+      this.prisma.client.findMany({ select: { id: true, name: true } }),
+    ]);
+
+    const vendorNames = vendors.map((v) => v.name);
+    const clientNames = clients.map((c) => c.name);
+
     const prompt =
       `Extract structured metadata from this logistics contract.\n\n` +
       `Contract name: ${contract.name}\n` +
-      `Vendor: ${contract.vendor.name}\n\n` +
-      `--- PROSE TEXT (first 8000 chars) ---\n${textSnippet}\n\n` +
+      (contract.vendor?.name ? `Vendor: ${contract.vendor.name}\n` : '') +
+      `\n--- EXISTING VENDORS ---\n${vendorNames.length > 0 ? vendorNames.join(', ') : '(none yet)'}\n` +
+      `\n--- EXISTING CLIENTS ---\n${clientNames.length > 0 ? clientNames.join(', ') : '(none yet)'}\n` +
+      `\n--- PROSE TEXT (first 8000 chars) ---\n${textSnippet}\n\n` +
       `--- TABLES ---\n${tableContext}`;
 
     this.logger.log(`Extracting metadata for contract ${contractId}`);
@@ -129,7 +155,9 @@ export class MetadataExtractionService {
           'Be precise — only fill fields you can confirm from the text. ' +
           'For dates, use ISO format (YYYY-MM-DD). ' +
           'For SCAC codes, only include if explicitly mentioned. ' +
-          'The summary should be useful for search — mention carrier, mode, geography, and date range.',
+          'The summary should be useful for search — mention carrier, mode, geography, and date range. ' +
+          'For vendorMatch: if the carrier in this document matches one of the existing vendors (even with slightly different spelling/casing), return that EXACT name from the list. Otherwise null. ' +
+          'For clientMatch: if the shipper/customer matches one of the existing clients (even with slightly different spelling/casing), return that EXACT name from the list. Otherwise null.',
         prompt,
         schema: metadataSchema,
       });
@@ -172,6 +200,43 @@ export class MetadataExtractionService {
           "keyTerms" = EXCLUDED."keyTerms",
           "updatedAt" = NOW()
       `;
+
+      // Resolve vendor
+      let resolvedVendorId: string | null = null;
+      if (object.vendorMatch) {
+        const match = vendors.find((v) => v.name === object.vendorMatch);
+        if (match) resolvedVendorId = match.id;
+      }
+      if (!resolvedVendorId && object.carrierName) {
+        const newVendor = await this.prisma.vendor.create({
+          data: { name: object.carrierName },
+        });
+        resolvedVendorId = newVendor.id;
+      }
+
+      // Resolve client
+      let resolvedClientId: string | null = null;
+      if (object.clientMatch) {
+        const match = clients.find((c) => c.name === object.clientMatch);
+        if (match) resolvedClientId = match.id;
+      }
+      if (!resolvedClientId && object.shipper) {
+        const newClient = await this.prisma.client.create({
+          data: { name: object.shipper },
+        });
+        resolvedClientId = newClient.id;
+      }
+
+      // Update contract with resolved vendor, client, type, and dates
+      await this.prisma.contract.update({
+        where: { id: contractId },
+        data: {
+          ...(resolvedVendorId && !contract.vendor ? { vendorId: resolvedVendorId } : {}),
+          ...(resolvedClientId ? { clientId: resolvedClientId } : {}),
+          type: object.contractType,
+          ...(object.startDate ? { effectiveFrom: new Date(object.startDate) } : {}),
+        },
+      });
 
       // Store summary + summary embedding on the Contract itself
       const { embedding } = await embed({

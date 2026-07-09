@@ -32,7 +32,7 @@ coverage
 out/
 build
 dist
-
+scripts
 
 # Debug
 npm-debug.log*

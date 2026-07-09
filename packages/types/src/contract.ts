@@ -49,8 +49,10 @@ export interface ContractTerm {
 
 export interface Contract {
   id: string;
-  vendorId: string;
+  vendorId?: string | null;
   vendorName?: string;
+  clientId?: string | null;
+  clientName?: string;
   name: string;
   type: ContractType;
   filePath: string;
@@ -65,9 +67,9 @@ export interface Contract {
 }
 
 export interface CreateContractPayload {
-  vendorId: string;
-  name: string;
-  type: ContractType;
+  vendorId?: string;
+  name?: string;
+  type?: ContractType;
   storageKey: string;
   fileName: string;
   effectiveFrom?: string;

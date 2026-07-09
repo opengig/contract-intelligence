@@ -3,6 +3,7 @@ import { ContractsRepository } from './repository/contracts.repository';
 import { DocumentStorageService } from '@/document-storage/document-storage.service';
 import { DocumentProcessingProducer } from '@/document-processing/document-processing.producer';
 import { CreateContractDto } from './dto/create-contract.dto';
+import { UpdateContractDto } from './dto/update-contract.dto';
 import { UploadTarget } from '@/document-storage/document-storage.types';
 
 @Injectable()
@@ -39,10 +40,17 @@ export class ContractsService {
   }
 
   async create(dto: CreateContractDto) {
+    const name =
+      dto.name?.trim() ||
+      dto.fileName
+        .replace(/\.[^/.]+$/, '')
+        .replace(/[-_]/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+
     const contract = await this.contractsRepository.create({
       vendorId: dto.vendorId,
-      name: dto.name,
-      type: dto.type,
+      name,
+      type: dto.type ?? 'other',
       storageKey: dto.storageKey,
       filePath: this.storage.getFilePath(dto.storageKey),
       fileName: dto.fileName,
@@ -82,6 +90,10 @@ export class ContractsService {
     this.logger.log(`Contract ${id} re-queued for processing (job ${jobId})`);
 
     return { id, status: 'uploaded', processingJobId: jobId };
+  }
+
+  async update(id: string, dto: UpdateContractDto) {
+    return this.contractsRepository.update(id, dto);
   }
 
   async delete(id: string) {

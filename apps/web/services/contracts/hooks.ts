@@ -46,6 +46,18 @@ export function useCreateContract() {
   });
 }
 
+export function useUpdateContract(contractId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { vendorId?: string; clientId?: string; name?: string; type?: string }) =>
+      contractsApi.update(contractId, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: contractKeys.detail(contractId) });
+      qc.invalidateQueries({ queryKey: contractKeys.all });
+    },
+  });
+}
+
 export function useUpdateTerm(contractId: string) {
   const qc = useQueryClient();
   return useMutation({

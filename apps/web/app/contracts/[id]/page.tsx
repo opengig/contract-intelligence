@@ -2,18 +2,23 @@
 
 import { use, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, CheckCircle2, Clock, AlertCircle, XCircle, Loader2, RotateCcw } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Clock, AlertCircle, XCircle, Loader2, RotateCcw, Pencil, Check, X, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useGetContract, useUpdateTerm, useActivateContract, useReprocessContract } from '@/services/contracts/hooks';
+import { useGetContract, useUpdateTerm, useUpdateContract, useActivateContract, useReprocessContract } from '@/services/contracts/hooks';
+import { useGetVendors, useCreateVendor } from '@/services/vendors/hooks';
+import { useGetClients, useCreateClient } from '@/services/clients/hooks';
 import type { ContractTerm, ContractTermStatus } from '@repo/types';
 
 export default function ContractDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data: contract, isLoading } = useGetContract(id);
   const { mutate: updateTerm } = useUpdateTerm(id);
+  const { mutate: updateContract } = useUpdateContract(id);
   const { mutate: activate, isPending: activating } = useActivateContract(id);
   const { mutate: reprocess, isPending: reprocessing } = useReprocessContract(id);
 
@@ -45,10 +50,33 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
         </Button>
         <div className='flex-1'>
           <h1 className='text-2xl font-bold'>{contract.name}</h1>
-          <p className='text-muted-foreground text-sm'>
-            {(contract as any).vendor?.name} · {contract.type.replace('_', ' ')}
-            {contract.effectiveFrom && ` · Effective ${new Date(contract.effectiveFrom).toLocaleDateString('en-IN')}`}
-          </p>
+          <div className='flex items-center gap-2 text-muted-foreground text-sm mt-0.5'>
+            <EditableEntity
+              label='Vendor'
+              currentId={(contract as any).vendor?.id}
+              currentName={(contract as any).vendor?.name}
+              useGetAll={useGetVendors}
+              useCreate={useCreateVendor}
+              onSave={(vendorId) => updateContract({ vendorId })}
+            />
+            <span>·</span>
+            <EditableEntity
+              label='Client'
+              currentId={(contract as any).client?.id}
+              currentName={(contract as any).client?.name}
+              useGetAll={useGetClients}
+              useCreate={useCreateClient}
+              onSave={(clientId) => updateContract({ clientId })}
+            />
+            <span>·</span>
+            <span>{contract.type.replace('_', ' ')}</span>
+            {contract.effectiveFrom && (
+              <>
+                <span>·</span>
+                <span>Effective {new Date(contract.effectiveFrom).toLocaleDateString('en-IN')}</span>
+              </>
+            )}
+          </div>
         </div>
         {contract.status === 'review' && (
           <Button onClick={() => activate()} disabled={activating}>
@@ -340,5 +368,123 @@ function MetadataCard({ metadata, summary }: { metadata: ContractMetadata; summa
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function EditableEntity({
+  label,
+  currentId,
+  currentName,
+  useGetAll,
+  useCreate,
+  onSave,
+}: {
+  label: string;
+  currentId?: string;
+  currentName?: string;
+  useGetAll: () => { data?: Array<{ id: string; name: string }> };
+  useCreate: () => { mutateAsync: (payload: { name: string }) => Promise<{ id: string; name: string }> };
+  onSave: (id: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+  const { data: items } = useGetAll();
+  const { mutateAsync: create } = useCreate();
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        className='inline-flex items-center gap-1 hover:text-foreground transition-colors group'
+        title={`Edit ${label}`}
+      >
+        <span>{currentName ?? `No ${label}`}</span>
+        <Pencil className='size-3 opacity-0 group-hover:opacity-100 transition-opacity' />
+      </button>
+    );
+  }
+
+  if (creating) {
+    return (
+      <span className='inline-flex items-center gap-1'>
+        <Input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder={`New ${label} name`}
+          className='h-6 w-36 text-xs'
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') { setCreating(false); setNewName(''); }
+            if (e.key === 'Enter' && newName.trim()) {
+              create({ name: newName.trim() }).then((entity) => {
+                onSave(entity.id);
+                setCreating(false);
+                setEditing(false);
+                setNewName('');
+              });
+            }
+          }}
+        />
+        <button
+          onClick={() => {
+            if (!newName.trim()) return;
+            create({ name: newName.trim() }).then((entity) => {
+              onSave(entity.id);
+              setCreating(false);
+              setEditing(false);
+              setNewName('');
+            });
+          }}
+          className='rounded p-0.5 text-primary hover:bg-primary/10'
+        >
+          <Check className='size-3' />
+        </button>
+        <button
+          onClick={() => { setCreating(false); setNewName(''); }}
+          className='rounded p-0.5 text-muted-foreground hover:bg-muted'
+        >
+          <X className='size-3' />
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className='inline-flex items-center gap-1'>
+      <Select
+        value={currentId ?? ''}
+        onValueChange={(val) => {
+          if (val === '__new__') {
+            setCreating(true);
+          } else {
+            onSave(val);
+            setEditing(false);
+          }
+        }}
+      >
+        <SelectTrigger className='h-6 w-40 text-xs'>
+          <SelectValue placeholder={`Select ${label}...`} />
+        </SelectTrigger>
+        <SelectContent>
+          {items?.map((item) => (
+            <SelectItem key={item.id} value={item.id}>
+              {item.name}
+            </SelectItem>
+          ))}
+          <SelectItem value='__new__'>
+            <span className='flex items-center gap-1 text-primary'>
+              <Plus className='size-3' /> Create new
+            </span>
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      <button
+        onClick={() => setEditing(false)}
+        className='rounded p-0.5 text-muted-foreground hover:bg-muted'
+      >
+        <X className='size-3' />
+      </button>
+    </span>
   );
 }

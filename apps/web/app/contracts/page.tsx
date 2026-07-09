@@ -119,7 +119,7 @@ export default function ContractsPage() {
                       }`}
                     >
                       <td className='px-6 py-3 text-muted-foreground'>{(c as any).vendor?.name ?? '—'}</td>
-                      <td className='px-6 py-3 text-muted-foreground'>{(c as any).metadata?.shipper ?? '—'}</td>
+                      <td className='px-6 py-3 text-muted-foreground'>{(c as any).client?.name ?? '—'}</td>
                       <td className='px-6 py-3 font-medium'>{c.name}</td>
                       <td className='px-6 py-3 capitalize text-muted-foreground'>{c.type.replace('_', ' ')}</td>
                       <td className='px-6 py-3'>

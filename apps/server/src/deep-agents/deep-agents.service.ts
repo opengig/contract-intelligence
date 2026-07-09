@@ -3,17 +3,18 @@ import { openai } from '@ai-sdk/openai';
 import {
   embed,
   tool,
+  streamText,
+  generateText,
   convertToModelMessages,
-  createUIMessageStreamResponse,
-  toUIMessageStream,
-  ToolLoopAgent,
   stepCountIs,
+  toUIMessageStream,
+  createUIMessageStreamResponse,
 } from 'ai';
+import type { UIMessage } from 'ai';
 import { z } from 'zod';
 import { evaluate } from 'mathjs';
 import { PrismaService } from '@/prisma/prisma.service';
 import { SandboxManagerService } from './sandbox-manager.service';
-import type { UIMessage } from 'ai';
 
 @Injectable()
 export class DeepAgentsService {
@@ -26,7 +27,6 @@ export class DeepAgentsService {
 
   async chat(
     messages: UIMessage[],
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     sessionId: string,
     scope?: {
       contractId?: string;
@@ -39,366 +39,421 @@ export class DeepAgentsService {
     const scopedContractId = scope?.contractId;
     const scopedVendorId = scope?.vendorId;
 
-    const agent = new ToolLoopAgent({
+    const tools = this.buildTools(scopedContractId, scopedVendorId, sessionId);
+
+    const result = streamText({
       model: openai('gpt-4.1'),
-      instructions: systemPrompt,
+      system: systemPrompt,
+      messages: await convertToModelMessages(messages),
+      tools,
       stopWhen: stepCountIs(50),
       temperature: 0.6,
-      tools: {
-        calculate: tool({
-          description:
-            'Evaluate arithmetic expressions and contract formulas. ' +
-            'Use after searchContracts or searchTableRows retrieves rates or formulas to compute ' +
-            'final charges, apply weight tiers, enforce min/max caps, or calculate ' +
-            'fuel surcharges, detention fees, and total costs.',
-          inputSchema: z.object({
-            expression: z
-              .string()
-              .describe(
-                'A math expression, e.g. "max(175, 2.25 * 500)" or "base_rate * weight * (1 + fuel_pct / 100)". Use plain arithmetic plus max() and min().',
-              ),
-            variables: z
-              .record(z.string(), z.number())
-              .optional()
-              .describe(
-                'Named variables to substitute, e.g. { "weight": 500, "base_rate": 2.25, "fuel_pct": 22 }',
-              ),
-            precision: z
-              .number()
-              .int()
-              .min(0)
-              .max(6)
-              .optional()
-              .default(2)
-              .describe('Decimal places to round the result to (default 2)'),
-          }),
-          execute: async ({
-            expression,
-            variables = {},
-            precision = 2,
-          }: {
-            expression: string;
-            variables?: Record<string, number>;
-            precision?: number;
-          }) => {
-            this.logger.log(
-              `calculate: expr="${expression}" vars=${JSON.stringify(variables)}`,
-            );
-            try {
-              let resolved = expression;
-              for (const [name, value] of Object.entries(variables)) {
-                resolved = resolved.replaceAll(
-                  new RegExp(`\\b${name}\\b`, 'g'),
-                  String(value),
-                );
-              }
-              const raw = Number(evaluate(resolved));
-              const factor = Math.pow(10, precision);
-              const result = Math.round(raw * factor) / factor;
-              return {
-                expression,
-                resolved,
-                result,
-                formatted:
-                  precision === 0 ? String(result) : result.toFixed(precision),
-              };
-            } catch (err) {
-              return {
-                expression,
-                error: err instanceof Error ? err.message : 'Evaluation failed',
-              };
-            }
-          },
-        }),
-
-        runQuery: tool({
-          // eslint-disable-next-line prettier/prettier
-          description: [
-            'Run a raw SQL SELECT against the contracts DB.',
-            'Use for aggregations or metadata lookups. Prefer executeCode for table data analysis.',
-            'Returns rows as an array of objects.',
-            '',
-            'SCHEMA (always double-quote PascalCase table/column names):',
-            '  "Contract": id, name, type, status, "vendorId", "effectiveFrom"',
-            '  "ContractTable": id, "contractId", name, summary, headers (JSON), rows (JSON), "rowCount"',
-            '  "ContractChunk": id, "contractId", "chunkIndex", content',
-            '  "Vendor": id, name',
-            '',
-            'Example — list all tables for a contract:',
-            '  SELECT name, summary, "rowCount" FROM "ContractTable" WHERE "contractId" = \'<id>\'',
-          ].join('\n'),
-          inputSchema: z.object({
-            sql: z.string().describe('A SQL SELECT query (read-only)'),
-          }),
-          execute: async ({ sql }: { sql: string }) => {
-            this.logger.log(`[runQuery] sql length=${sql.length}`);
-            try {
-              const rows =
-                await this.prisma.$queryRawUnsafe<Record<string, unknown>[]>(
-                  sql,
-                );
-              this.logger.log(`[runQuery] returned ${rows.length} rows`);
-              return { rows, count: rows.length };
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              this.logger.error(`[runQuery] error: ${msg}`);
-              return { error: msg, rows: [], count: 0 };
-            }
-          },
-        }),
-
-        searchContracts: tool({
-          description:
-            'Search contract terms (ContractTerm) and document chunks (ContractChunk) ' +
-            'to answer questions about clauses, conditions, policies, or prose content. ' +
-            'Runs structured text search and semantic vector search in parallel. ' +
-            'For structured table data (rates, surcharges, schedules), prefer searchTableRows instead.',
-          inputSchema: z.object({
-            query: z
-              .string()
-              .describe(
-                'Natural language question, e.g. "freight rate Mumbai to Pune" or "detention policy"',
-              ),
-            vendorName: z
-              .string()
-              .optional()
-              .describe('Optional vendor name to filter results'),
-            topK: z
-              .number()
-              .int()
-              .min(1)
-              .max(10)
-              .optional()
-              .default(5)
-              .describe('Results per search type (default 5)'),
-          }),
-          execute: async ({
-            query,
-            vendorName,
-            topK,
-          }: {
-            query: string;
-            vendorName?: string;
-            topK?: number;
-          }) => {
-            const k = topK ?? 5;
-            this.logger.log(
-              `searchContracts: query="${query}" vendor="${vendorName ?? 'any'}" topK=${k}`,
-            );
-            const [textMatches, semanticMatches] = await Promise.all([
-              this.textSearch(query, vendorName, k),
-              this.semanticSearch(query, vendorName, k),
-            ]);
-
-            type Citation = {
-              contractId: string;
-              contractName: string;
-              vendorName: string;
-              effectiveFrom: Date | null | undefined;
-              matchCount: number;
-            };
-            const citationMap = new Map<string, Citation>();
-            for (const m of [...textMatches, ...semanticMatches]) {
-              const existing = citationMap.get(m.contractId);
-              if (existing) {
-                existing.matchCount++;
-              } else {
-                citationMap.set(m.contractId, {
-                  contractId: m.contractId,
-                  contractName: m.contractName,
-                  vendorName: m.vendorName,
-                  effectiveFrom:
-                    'effectiveFrom' in m ? m.effectiveFrom : undefined,
-                  matchCount: 1,
-                });
-              }
-            }
-            const citations = Array.from(citationMap.values()).sort(
-              (a, b) => b.matchCount - a.matchCount,
-            );
-
-            return {
-              textMatches,
-              semanticMatches,
-              citations,
-              totalResults: textMatches.length + semanticMatches.length,
-            };
-          },
-        }),
-
-        listTables: tool({
-          description:
-            'List ALL tables available for a contract with their exact name, columns, summary, and row count. ' +
-            'ALWAYS call this first for any table/rate query before calling getTableSample or executeCode. ' +
-            'Use it to discover which table actually contains the data you need — never guess table names.',
-          inputSchema: z.object({
-            contractId: z
-              .string()
-              .optional()
-              .describe(
-                'Contract ID to list tables for. Defaults to scoped contract.',
-              ),
-          }),
-          execute: async ({ contractId }: { contractId?: string }) => {
-            const resolvedId = contractId ?? scopedContractId;
-            this.logger.log(
-              `listTables: contractId="${resolvedId ?? 'any'}" vendorId="${scopedVendorId ?? 'any'}"`,
-            );
-            const tables = await this.prisma.contractTable.findMany({
-              where: resolvedId
-                ? { contractId: resolvedId }
-                : scopedVendorId
-                  ? {
-                      contract: {
-                        vendorId: scopedVendorId,
-                        status: { in: ['active', 'review'] },
-                      },
-                    }
-                  : {},
-              select: {
-                id: true,
-                contractId: true,
-                name: true,
-                summary: true,
-                headers: true,
-                rowCount: true,
-                contract: {
-                  select: { name: true, vendor: { select: { name: true } } },
-                },
-              },
-              orderBy: { createdAt: 'asc' },
-            });
-            if (tables.length === 0) {
-              return {
-                found: false,
-                message: 'No tables found for this contract.',
-              };
-            }
-            return {
-              found: true,
-              count: tables.length,
-              tables: tables.map((t) => ({
-                contractId: t.contractId,
-                contractName: t.contract.name,
-                vendorName: t.contract.vendor.name,
-                tableName: t.name,
-                summary: t.summary,
-                columns: t.headers as string[],
-                rowCount: t.rowCount,
-              })),
-              instruction:
-                'Pick the table(s) whose summary and columns match the data you need. ' +
-                'Then call getTableSample with the EXACT tableName string shown above.',
-            };
-          },
-        }),
-
-        searchTables: tool({
-          description:
-            'Search tables by keyword across name or summary when listTables returns too many results. ' +
-            'Prefer listTables for initial discovery — use searchTables only to narrow down a large list.',
-          inputSchema: z.object({
-            query: z
-              .string()
-              .describe(
-                'Keyword to match against table name or summary (e.g. "freight rate", "surcharge")',
-              ),
-            contractId: z
-              .string()
-              .optional()
-              .describe('Optional contract ID to scope the search'),
-          }),
-          execute: async ({
-            query,
-            contractId,
-          }: {
-            query: string;
-            contractId?: string;
-          }) => {
-            const resolvedId = contractId ?? scopedContractId;
-            this.logger.log(
-              `searchTables: query="${query}" contractId="${resolvedId ?? 'any'}"`,
-            );
-            return this.searchTables(query, resolvedId, scopedVendorId);
-          },
-        }),
-
-        getTableSample: tool({
-          description:
-            'MANDATORY before every executeCode call. ' +
-            'Returns exactColumns (deduplicated, whitespace-stripped column names) and sample rows as key→value dicts. ' +
-            'Copy exactColumns verbatim into your Python script — never guess column names. ' +
-            'Also shows value formats (e.g. "BOM" vs "Mumbai", whether blanks are "-" or null). ' +
-            'Call once per table you intend to query.',
-          inputSchema: z.object({
-            tableName: z.string().describe('Table name (fuzzy match)'),
-            contractId: z
-              .string()
-              .optional()
-              .describe('Optional contract ID to scope'),
-            sampleSize: z
-              .number()
-              .int()
-              .min(1)
-              .max(20)
-              .optional()
-              .default(5)
-              .describe('Number of sample rows (default 5)'),
-          }),
-          execute: async ({
-            tableName,
-            contractId,
-            sampleSize,
-          }: {
-            tableName: string;
-            contractId?: string;
-            sampleSize?: number;
-          }) => {
-            const n = sampleSize ?? 5;
-            const resolvedId = contractId ?? scopedContractId;
-            this.logger.log(
-              `getTableSample: table="${tableName}" contractId="${resolvedId ?? 'any'}" n=${n}`,
-            );
-            return this.getTableSample(tableName, resolvedId, n);
-          },
-        }),
-
-        executeCode: tool({
-          description:
-            'Execute a Python script to analyze contract table data. ' +
-            'Available libraries: psycopg2, pandas, numpy. ' +
-            'DB credentials are available as env vars: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD. Always add sslmode="require" to the connection. ' +
-            'Query "ContractTable" — columns: id, "contractId", name, summary, headers (JSON list), rows (JSON 2D list), "rowCount". psycopg2 deserialises JSON automatically. ' +
-            'Load data into a pandas DataFrame for filtering, joins, and calculations. Always print results to stdout.',
-          inputSchema: z.object({
-            code: z.string().describe('Python code to execute'),
-            sessionLabel: z
-              .string()
-              .optional()
-              .describe('Short label for logging (e.g. "rate-lookup-BUD-NRT")'),
-          }),
-          execute: async ({
-            code,
-            sessionLabel,
-          }: {
-            code: string;
-            sessionLabel?: string;
-          }) => {
-            const label = sessionLabel ?? sessionId;
-            this.logger.log(`executeCode: session="${label}"`);
-            return this.sandboxManager.executeCode(code, label);
-          },
-        }),
+      onError: (error) => {
+        this.logger.error(
+          `[chat] error: ${error instanceof Error ? error.message : String(error)}`,
+        );
       },
     });
 
-    const agentResult = await agent.stream({
+    return createUIMessageStreamResponse({
+      stream: toUIMessageStream({
+        stream: result.stream,
+        onError: (error) => {
+          this.logger.error(
+            `[chat] error: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return (
+            'Error: ' + (error instanceof Error ? error.message : String(error))
+          );
+        },
+      }),
+    });
+  }
+
+  private buildTools(
+    scopedContractId: string | undefined,
+    scopedVendorId: string | undefined,
+    sessionId: string,
+  ) {
+    return {
+      calculate: tool({
+        description:
+          'Evaluate arithmetic expressions and contract formulas. ' +
+          'Use after searchContracts or searchTableRows retrieves rates or formulas to compute ' +
+          'final charges, apply weight tiers, enforce min/max caps, or calculate ' +
+          'fuel surcharges, detention fees, and total costs.',
+        inputSchema: z.object({
+          expression: z
+            .string()
+            .describe(
+              'A math expression, e.g. "max(175, 2.25 * 500)" or "base_rate * weight * (1 + fuel_pct / 100)". Use plain arithmetic plus max() and min().',
+            ),
+          variables: z
+            .record(z.string(), z.number())
+            .optional()
+            .describe(
+              'Named variables to substitute, e.g. { "weight": 500, "base_rate": 2.25, "fuel_pct": 22 }',
+            ),
+          precision: z
+            .number()
+            .int()
+            .min(0)
+            .max(6)
+            .optional()
+            .default(2)
+            .describe('Decimal places to round the result to (default 2)'),
+        }),
+        execute: async ({
+          expression,
+          variables = {},
+          precision = 2,
+        }: {
+          expression: string;
+          variables?: Record<string, number>;
+          precision?: number;
+        }) => {
+          this.logger.log(
+            `calculate: expr="${expression}" vars=${JSON.stringify(variables)}`,
+          );
+          try {
+            let resolved = expression;
+            for (const [name, value] of Object.entries(variables)) {
+              resolved = resolved.replaceAll(
+                new RegExp(`\\b${name}\\b`, 'g'),
+                String(value),
+              );
+            }
+            const raw = Number(evaluate(resolved));
+            const factor = Math.pow(10, precision);
+            const result = Math.round(raw * factor) / factor;
+            return {
+              expression,
+              resolved,
+              result,
+              formatted:
+                precision === 0 ? String(result) : result.toFixed(precision),
+            };
+          } catch (err) {
+            return {
+              expression,
+              error: err instanceof Error ? err.message : 'Evaluation failed',
+            };
+          }
+        },
+      }),
+
+      runQuery: tool({
+        description: [
+          'Run a raw SQL SELECT against the contracts DB.',
+          'Use for aggregations or metadata lookups. Prefer executeCode for table data analysis.',
+          'Returns rows as an array of objects.',
+          '',
+          'SCHEMA (always double-quote PascalCase table/column names):',
+          '  "Contract": id, name, type, status, "vendorId" (nullable), "clientId" (nullable), "effectiveFrom"',
+          '  "ContractTable": id, "contractId", name, summary, headers (JSON), rows (JSON), "rowCount"',
+          '  "ContractChunk": id, "contractId", "chunkIndex", content',
+          '  "Vendor": id, name',
+          '  "Client": id, name',
+          '',
+          'Example — list all tables for a contract:',
+          '  SELECT name, summary, "rowCount" FROM "ContractTable" WHERE "contractId" = \'<id>\'',
+        ].join('\n'),
+        inputSchema: z.object({
+          sql: z.string().describe('A SQL SELECT query (read-only)'),
+        }),
+        execute: async ({ sql }: { sql: string }) => {
+          this.logger.log(`[runQuery] sql length=${sql.length}`);
+          try {
+            const rawRows =
+              await this.prisma.$queryRawUnsafe<Record<string, unknown>[]>(sql);
+            // Convert BigInt values to numbers/strings so the result is JSON-serializable
+            const rows = JSON.parse(
+              JSON.stringify(rawRows, (_, v) =>
+                typeof v === 'bigint' ? Number(v) : v,
+              ),
+            );
+            this.logger.log(`[runQuery] returned ${rows.length} rows`);
+            return { rows, count: rows.length };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.logger.error(`[runQuery] error: ${msg}`);
+            return { error: msg, rows: [], count: 0 };
+          }
+        },
+      }),
+
+      searchContracts: tool({
+        description:
+          'Search contract terms (ContractTerm) and document chunks (ContractChunk) ' +
+          'to answer questions about clauses, conditions, policies, or prose content. ' +
+          'Runs structured text search and semantic vector search in parallel. ' +
+          'For structured table data (rates, surcharges, schedules), prefer searchTableRows instead.',
+        inputSchema: z.object({
+          query: z
+            .string()
+            .describe(
+              'Natural language question, e.g. "freight rate Mumbai to Pune" or "detention policy"',
+            ),
+          vendorName: z
+            .string()
+            .optional()
+            .describe('Optional vendor name to filter results'),
+          topK: z
+            .number()
+            .int()
+            .min(1)
+            .max(10)
+            .optional()
+            .default(5)
+            .describe('Results per search type (default 5)'),
+        }),
+        execute: async ({
+          query,
+          vendorName,
+          topK,
+        }: {
+          query: string;
+          vendorName?: string;
+          topK?: number;
+        }) => {
+          const k = topK ?? 5;
+          this.logger.log(
+            `searchContracts: query="${query}" vendor="${vendorName ?? 'any'}" topK=${k}`,
+          );
+          const [textMatches, semanticMatches] = await Promise.all([
+            this.textSearch(query, vendorName, k),
+            this.semanticSearch(query, vendorName, k),
+          ]);
+
+          type Citation = {
+            contractId: string;
+            contractName: string;
+            vendorName: string;
+            effectiveFrom: Date | null | undefined;
+            matchCount: number;
+          };
+          const citationMap = new Map<string, Citation>();
+          for (const m of [...textMatches, ...semanticMatches]) {
+            const existing = citationMap.get(m.contractId);
+            if (existing) {
+              existing.matchCount++;
+            } else {
+              citationMap.set(m.contractId, {
+                contractId: m.contractId,
+                contractName: m.contractName,
+                vendorName: m.vendorName,
+                effectiveFrom:
+                  'effectiveFrom' in m ? m.effectiveFrom : undefined,
+                matchCount: 1,
+              });
+            }
+          }
+          const citations = Array.from(citationMap.values()).sort(
+            (a, b) => b.matchCount - a.matchCount,
+          );
+
+          return {
+            textMatches,
+            semanticMatches,
+            citations,
+            totalResults: textMatches.length + semanticMatches.length,
+          };
+        },
+      }),
+
+      listTables: tool({
+        description:
+          'List ALL tables available for a contract with their exact name, columns, summary, and row count. ' +
+          'ALWAYS call this first for any table/rate query before calling getTableSample or executeCode. ' +
+          'Use it to discover which table actually contains the data you need — never guess table names.',
+        inputSchema: z.object({
+          contractId: z
+            .string()
+            .optional()
+            .describe(
+              'Contract ID to list tables for. Defaults to scoped contract.',
+            ),
+        }),
+        execute: async ({ contractId }: { contractId?: string }) => {
+          const resolvedId = contractId ?? scopedContractId;
+          this.logger.log(
+            `listTables: contractId="${resolvedId ?? 'any'}" vendorId="${scopedVendorId ?? 'any'}"`,
+          );
+          const tables = await this.prisma.contractTable.findMany({
+            where: resolvedId
+              ? { contractId: resolvedId }
+              : scopedVendorId
+                ? {
+                    contract: {
+                      vendorId: scopedVendorId,
+                      status: { in: ['active', 'review'] },
+                    },
+                  }
+                : {},
+            select: {
+              id: true,
+              contractId: true,
+              name: true,
+              summary: true,
+              headers: true,
+              rowCount: true,
+              contract: {
+                select: { name: true, vendor: { select: { name: true } } },
+              },
+            },
+            orderBy: { createdAt: 'asc' },
+          });
+          if (tables.length === 0) {
+            return {
+              found: false,
+              message: 'No tables found for this contract.',
+            };
+          }
+          return {
+            found: true,
+            count: tables.length,
+            tables: tables.map((t) => ({
+              contractId: t.contractId,
+              contractName: t.contract.name,
+              vendorName: t.contract.vendor?.name ?? 'Unassigned',
+              tableName: t.name,
+              summary: t.summary,
+              columns: t.headers as string[],
+              rowCount: t.rowCount,
+            })),
+            instruction:
+              'Pick the table(s) whose summary and columns match the data you need. ' +
+              'Then call getTableSample with the EXACT tableName string shown above.',
+          };
+        },
+      }),
+
+      searchTables: tool({
+        description:
+          'Search tables by keyword across name or summary when listTables returns too many results. ' +
+          'Prefer listTables for initial discovery — use searchTables only to narrow down a large list.',
+        inputSchema: z.object({
+          query: z
+            .string()
+            .describe(
+              'Keyword to match against table name or summary (e.g. "freight rate", "surcharge")',
+            ),
+          contractId: z
+            .string()
+            .optional()
+            .describe('Optional contract ID to scope the search'),
+        }),
+        execute: async ({
+          query,
+          contractId,
+        }: {
+          query: string;
+          contractId?: string;
+        }) => {
+          const resolvedId = contractId ?? scopedContractId;
+          this.logger.log(
+            `searchTables: query="${query}" contractId="${resolvedId ?? 'any'}"`,
+          );
+          return this.searchTables(query, resolvedId, scopedVendorId);
+        },
+      }),
+
+      getTableSample: tool({
+        description:
+          'MANDATORY before every executeCode call. ' +
+          'Returns exactColumns (deduplicated, whitespace-stripped column names) and sample rows as key→value dicts. ' +
+          'Copy exactColumns verbatim into your Python script — never guess column names. ' +
+          'Also shows value formats (e.g. "BOM" vs "Mumbai", whether blanks are "-" or null). ' +
+          'Call once per table you intend to query.',
+        inputSchema: z.object({
+          tableName: z.string().describe('Table name (fuzzy match)'),
+          contractId: z
+            .string()
+            .optional()
+            .describe('Optional contract ID to scope'),
+          sampleSize: z
+            .number()
+            .int()
+            .min(1)
+            .max(20)
+            .optional()
+            .default(5)
+            .describe('Number of sample rows (default 5)'),
+        }),
+        execute: async ({
+          tableName,
+          contractId,
+          sampleSize,
+        }: {
+          tableName: string;
+          contractId?: string;
+          sampleSize?: number;
+        }) => {
+          const n = sampleSize ?? 5;
+          const resolvedId = contractId ?? scopedContractId;
+          this.logger.log(
+            `getTableSample: table="${tableName}" contractId="${resolvedId ?? 'any'}" n=${n}`,
+          );
+          return this.getTableSample(tableName, resolvedId, n);
+        },
+      }),
+
+      executeCode: tool({
+        description:
+          'Execute a Python script to analyze contract table data. ' +
+          'Available libraries: psycopg2, pandas, numpy. ' +
+          'DB credentials are available as env vars: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD. Always add sslmode="require" to the connection. ' +
+          'Query "ContractTable" — columns: id, "contractId", name, summary, headers (JSON list), rows (JSON 2D list), "rowCount". psycopg2 deserialises JSON automatically. ' +
+          'Load data into a pandas DataFrame for filtering, joins, and calculations. Always print results to stdout.',
+        inputSchema: z.object({
+          code: z.string().describe('Python code to execute'),
+          sessionLabel: z
+            .string()
+            .optional()
+            .describe('Short label for logging (e.g. "rate-lookup-BUD-NRT")'),
+        }),
+        execute: async ({
+          code,
+          sessionLabel,
+        }: {
+          code: string;
+          sessionLabel?: string;
+        }) => {
+          const label = sessionLabel ?? sessionId;
+          this.logger.log(`executeCode: session="${label}"`);
+          return this.sandboxManager.executeCode(code, label);
+        },
+      }),
+    };
+  }
+
+  // ── Test endpoint: non-streaming response ─────────────────────────────────
+
+  async chatSync(
+    messages: UIMessage[],
+    sessionId: string,
+    scope?: {
+      contractId?: string;
+      vendorId?: string;
+      routedContractIds?: string[];
+    },
+  ): Promise<string> {
+    const systemPrompt = await this.buildSystemPrompt(scope);
+    const scopedContractId = scope?.contractId;
+    const scopedVendorId = scope?.vendorId;
+
+    const tools = this.buildTools(scopedContractId, scopedVendorId, sessionId);
+
+    const result = await generateText({
+      model: openai('gpt-4.1'),
+      system: systemPrompt,
       messages: await convertToModelMessages(messages),
+      tools,
+      stopWhen: stepCountIs(50),
+      temperature: 0.6,
     });
 
-    return createUIMessageStreamResponse({
-      stream: toUIMessageStream({ stream: agentResult.stream }),
-    });
+    return result.text;
   }
 
   // ── Text search ───────────────────────────────────────────────────────────
@@ -436,7 +491,7 @@ export class DeepAgentsService {
       source: 'text_search' as const,
       contractId: t.contract.id,
       contractName: t.contract.name,
-      vendorName: t.contract.vendor.name,
+      vendorName: t.contract.vendor?.name ?? 'Unassigned',
       effectiveFrom: t.contract.effectiveFrom,
       termType: t.termType,
       description: t.description,
@@ -478,11 +533,11 @@ export class DeepAgentsService {
          cc.content,
          c.id              AS "contractId",
          c.name            AS "contractName",
-         v.name            AS "vendorName",
+         COALESCE(v.name, 'Unassigned') AS "vendorName",
          1 - (cc.embedding <=> '${vec}'::vector) AS similarity
        FROM "ContractChunk" cc
        JOIN "Contract"      c  ON cc."contractId" = c.id
-       JOIN "Vendor"        v  ON c."vendorId"    = v.id
+       LEFT JOIN "Vendor"   v  ON c."vendorId"    = v.id
        WHERE c.status IN ('active', 'review')
        ${vendorFilter}
        ORDER BY cc.embedding <=> '${vec}'::vector
@@ -611,7 +666,7 @@ export class DeepAgentsService {
       tableId: t.id,
       contractId: t.contractId,
       contractName: t.contract.name,
-      vendorName: t.contract.vendor.name,
+      vendorName: t.contract.vendor?.name ?? 'Unassigned',
       tableName: t.name,
       summary: t.summary,
       headers: t.headers as string[],
@@ -646,6 +701,7 @@ export class DeepAgentsService {
         status: true,
         effectiveFrom: true,
         vendor: { select: { id: true, name: true } },
+        client: { select: { id: true, name: true } },
         tables: {
           select: { name: true, summary: true, headers: true, rowCount: true },
           orderBy: { createdAt: 'asc' },
@@ -663,10 +719,14 @@ export class DeepAgentsService {
               const effectiveStr = c.effectiveFrom
                 ? ` | Effective: ${new Date(c.effectiveFrom).toLocaleDateString('en-IN')}`
                 : '';
+              const vendorStr = c.vendor?.name ?? 'Unassigned';
+              const clientStr = c.client?.name
+                ? ` | client: ${c.client.name}`
+                : '';
               let entry =
                 `CONTRACT: ${c.name}\n` +
                 `  id: ${c.id}\n` +
-                `  vendor: ${c.vendor.name} | type: ${c.type}${effectiveStr}\n` +
+                `  vendor: ${vendorStr}${clientStr} | type: ${c.type}${effectiveStr}\n` +
                 `  link: /contracts/${c.id}`;
 
               if (c.tables.length > 0) {
@@ -693,7 +753,7 @@ export class DeepAgentsService {
       : scope?.vendorId
         ? `\nYou are scoped to a specific vendor. Only use that vendor's contracts.\n`
         : scope?.routedContractIds?.length
-          ? `\nContracts below were auto-selected as most relevant to the user's query. Search within these first, but use searchContracts if needed for broader results.\n`
+          ? `\nContracts below were auto-selected as the TOP MATCHING contracts — they are NOT all contracts in the system. ALWAYS use runQuery to query the full database when the user asks about "all" contracts/vendors/modes, asks discovery questions ("which vendors", "what modes exist"), or needs cross-vendor/cross-contract comparisons. The catalog is a starting point, not the complete picture.\n`
           : '';
 
     return `You are ContractIQ, an expert logistics contract analyst.${scopeNote}
@@ -721,8 +781,9 @@ The lane-definition table tells you 0139 = Val de Reuil → Casablanca. Then you
 The database stores contract data in these tables (PostgreSQL, double-quote all names):
 
 \`\`\`
-"Contract"      — id, name, type, status, "vendorId", "effectiveFrom", "effectiveTo"
+"Contract"      — id, name, type, status, "vendorId" (nullable), "clientId" (nullable), "effectiveFrom", "effectiveTo"
 "Vendor"        — id, name
+"Client"        — id, name
 "ContractTable" — id, "contractId", name, summary,
                   headers  JSON   -- array of column name strings, e.g. ["Origin", "Destination", "Rate"]
                   rows     JSON   -- 2D array of cell values, e.g. [["BOM","DEL",150], ...]
@@ -953,6 +1014,31 @@ The contract may also define a **quarterly fuel adjustment mechanism** (e.g. usi
 - NEVER add fuel as a separate line item in rate calculations unless the contract prose specifically defines a per-shipment fuel surcharge.
 - In your answer, state: "Fuel: Included in rate (IRC)" or "Fuel: Included, subject to quarterly index adjustment."
 - Only if \`searchContracts\` returns explicit separate fuel surcharge terms should you calculate fuel separately.
+
+## DATE & ACTIVE CONTRACT LOGIC — CRITICAL
+
+When filtering contracts by date (e.g. "active as of 2024-06-01"):
+- A contract is active on date X if: \`"effectiveFrom" <= X AND ("effectiveTo" IS NULL OR "effectiveTo" >= X)\`
+- **NULL effectiveTo means the contract is STILL ACTIVE** (open-ended). NEVER exclude contracts just because effectiveTo is null.
+- Example SQL: \`WHERE "effectiveFrom" <= '2024-06-01' AND ("effectiveTo" IS NULL OR "effectiveTo" >= '2024-06-01')\`
+
+## SCOPE AWARENESS — WHEN TO QUERY THE FULL DATABASE
+
+The catalog above shows only the TOP MATCHING contracts — NOT everything in the system. You MUST use \`runQuery\` to search the full database when:
+- User asks about "all" contracts, "all" vendors, "all" modes, or "across all documents"
+- User asks "which vendors" or "which modes exist" (discovery questions)
+- User asks for cross-vendor comparisons without naming specific vendors
+- The catalog doesn't contain enough information to fully answer the question
+
+For these queries, use runQuery with JOINs to "Client", "Vendor", "ContractMetadata" to get complete results.
+
+## DATA QUALITY & REVIEW QUESTIONS
+
+When users ask "which attributes need review" or "what's missing/wrong":
+- Actually CHECK the data using \`runQuery\` — don't just list generic issues.
+- Query for NULL or empty fields: \`SELECT "carrierName", "carrierScac", mode, shipper FROM "ContractMetadata" WHERE "carrierName" IS NULL OR "carrierScac" IS NULL\`
+- Check for duplicate vendor names: \`SELECT name, COUNT(*) FROM "Vendor" GROUP BY name HAVING COUNT(*) > 1\`
+- Report specific contracts with missing data, not generic advice.
 
 ## OTHER WORKFLOWS
 - Clauses, policies, definitions → \`searchContracts\`

@@ -32,16 +32,28 @@ model Vendor {
   updatedAt DateTime   @updatedAt
 }
 
+// ─── Clients ─────────────────────────────────────────────────────────────────
+
+model Client {
+  id        String     @id @default(uuid())
+  name      String
+  contracts Contract[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
 // ─── Contracts ───────────────────────────────────────────────────────────────
 
 // type:   "rate_sheet" | "amendment" | "surcharge" | "other"
 // status: "uploaded" | "parsing" | "parsed" | "review" | "active" | "error"
 model Contract {
   id              String           @id @default(uuid())
-  vendorId        String
-  vendor          Vendor           @relation(fields: [vendorId], references: [id])
+  vendorId        String?
+  vendor          Vendor?          @relation(fields: [vendorId], references: [id])
+  clientId        String?
+  client          Client?          @relation(fields: [clientId], references: [id])
   name            String
-  type            String           // "rate_sheet" | "amendment" | "surcharge" | "other"
+  type            String           @default("other") // "rate_sheet" | "amendment" | "surcharge" | "other"
   fileName        String
   filePath        String
   storageKey      String?          // Azure blob key or local relative path

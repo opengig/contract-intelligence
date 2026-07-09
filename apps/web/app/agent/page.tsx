@@ -738,7 +738,7 @@ export default function AgentPage() {
               <option value=''>All contracts</option>
               {contracts.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.vendor.name} — {c.name}
+                  {c.vendor?.name ?? 'Unassigned'} — {c.name}
                 </option>
               ))}
             </select>

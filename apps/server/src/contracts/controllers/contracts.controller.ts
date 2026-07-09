@@ -15,6 +15,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '@/auth/guards/jwt-auth.guard';
 import { ContractsService } from '@/contracts/contracts.service';
 import { CreateContractDto } from '@/contracts/dto/create-contract.dto';
+import { UpdateContractDto } from '@/contracts/dto/update-contract.dto';
 import { UpdateTermDto } from '@/contracts/dto/update-term.dto';
 import { PresignDto } from '@/contracts/dto/presign.dto';
 import { FilesService } from '@/files/files.service';
@@ -60,6 +61,11 @@ export class ContractsController {
   @Post()
   create(@Body() dto: CreateContractDto) {
     return this.contractsService.create(dto);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdateContractDto) {
+    return this.contractsService.update(id, dto);
   }
 
   @Patch(':id/terms/:termId')

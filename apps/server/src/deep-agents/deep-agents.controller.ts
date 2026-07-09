@@ -36,9 +36,7 @@ export class DeepAgentsController {
         .reverse()
         .find((m: any) => m.role === 'user');
       const queryText =
-        lastUserMsg?.content ??
-        lastUserMsg?.parts?.find((p: any) => p.type === 'text')?.text ??
-        '';
+        lastUserMsg?.parts?.find((p: any) => p.type === 'text')?.text ?? '';
 
       if (queryText) {
         const routed = await this.router.routeQuery(queryText, 5);
@@ -75,5 +73,70 @@ export class DeepAgentsController {
       res.end();
       throw err;
     });
+  }
+
+  // Test endpoint — non-streaming, returns plain JSON
+  @Post('chat/test')
+  async chatTest(@Req() req: Request, @Res() res: Response) {
+    const {
+      messages: rawMessages,
+      sessionId,
+      contractId,
+      vendorId,
+    } = req.body as {
+      messages: any[];
+      sessionId?: string;
+      contractId?: string;
+      vendorId?: string;
+    };
+
+    const resolvedSessionId =
+      sessionId ??
+      (rawMessages[0]?.id as string | undefined) ??
+      crypto.randomUUID();
+
+    const messages = rawMessages.map((m: any) => ({
+      id: m.id ?? crypto.randomUUID(),
+      role: m.role,
+      parts:
+        m.parts ??
+        (m.content
+          ? [
+              {
+                type: 'text',
+                text: typeof m.content === 'string' ? m.content : '',
+              },
+            ]
+          : []),
+    }));
+
+    let scope:
+      | { contractId?: string; vendorId?: string; routedContractIds?: string[] }
+      | undefined;
+
+    if (contractId || vendorId) {
+      scope = { contractId, vendorId };
+    } else {
+      const lastUserMsg = [...messages]
+        .reverse()
+        .find((m: any) => m.role === 'user');
+      const queryText =
+        lastUserMsg?.parts?.find((p: any) => p.type === 'text')?.text ?? '';
+
+      if (queryText) {
+        const routed = await this.router.routeQuery(queryText, 5);
+        if (routed.length > 0) {
+          scope = { routedContractIds: routed.map((r) => r.id) };
+        }
+      }
+    }
+
+    const text = await this.agentService.chatSync(
+      messages,
+      resolvedSessionId,
+      scope,
+    );
+
+    res.json({ text });
   }
 }

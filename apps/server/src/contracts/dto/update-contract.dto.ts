@@ -1,9 +1,13 @@
 import { IsString, IsOptional, IsIn } from 'class-validator';
 
-export class CreateContractDto {
+export class UpdateContractDto {
   @IsString()
   @IsOptional()
   vendorId?: string;
+
+  @IsString()
+  @IsOptional()
+  clientId?: string;
 
   @IsString()
   @IsOptional()
@@ -12,14 +16,4 @@ export class CreateContractDto {
   @IsIn(['rate_sheet', 'amendment', 'surcharge', 'other'])
   @IsOptional()
   type?: string;
-
-  @IsString()
-  storageKey: string;
-
-  @IsString()
-  fileName: string;
-
-  @IsString()
-  @IsOptional()
-  effectiveFrom?: string;
 }

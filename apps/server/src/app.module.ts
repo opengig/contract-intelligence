@@ -16,6 +16,7 @@ import { DocumentProcessingModule } from './document-processing/document-process
 import { AuthModule } from './auth/auth.module';
 import { DeepAgentsModule } from './deep-agents/deep-agents.module';
 import { VendorsModule } from './vendors/vendors.module';
+import { ClientsModule } from './clients/clients.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { VendorsModule } from './vendors/vendors.module';
     AuthModule,
     DeepAgentsModule,
     VendorsModule,
+    ClientsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

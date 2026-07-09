@@ -9,6 +9,10 @@ const queryIntentSchema = z.object({
     .string()
     .nullable()
     .describe('Carrier/vendor name mentioned in query'),
+  clientName: z
+    .string()
+    .nullable()
+    .describe('Client/shipper/customer name mentioned in query'),
   mode: z
     .string()
     .nullable()
@@ -106,11 +110,11 @@ export class ContractRouterService {
       `SELECT
          c.id,
          c.name,
-         v.name AS "vendorName",
+         COALESCE(v.name, 'Unassigned') AS "vendorName",
          c.summary,
          1 - (c."summaryEmbedding" <=> '${vec}'::vector) AS similarity
        FROM "Contract" c
-       JOIN "Vendor" v ON c."vendorId" = v.id
+       LEFT JOIN "Vendor" v ON c."vendorId" = v.id
        WHERE c.status IN ('active', 'review')
          AND c."summaryEmbedding" IS NOT NULL
        ORDER BY c."summaryEmbedding" <=> '${vec}'::vector
@@ -138,6 +142,12 @@ export class ContractRouterService {
         `(v.name ILIKE '%${escaped}%' OR cm."carrierName" ILIKE '%${escaped}%')`,
       );
     }
+    if (intent.clientName) {
+      const escaped = intent.clientName.replace(/'/g, "''");
+      conditions.push(
+        `(cl.name ILIKE '%${escaped}%' OR cm.shipper ILIKE '%${escaped}%')`,
+      );
+    }
     if (intent.mode) {
       const escaped = intent.mode.replace(/'/g, "''");
       conditions.push(`cm.mode = '${escaped}'`);
@@ -156,9 +166,10 @@ export class ContractRouterService {
     };
 
     const results = await this.prisma.$queryRawUnsafe<Row[]>(
-      `SELECT c.id, c.name, v.name AS "vendorName", c.summary
+      `SELECT c.id, c.name, COALESCE(v.name, 'Unassigned') AS "vendorName", c.summary
        FROM "Contract" c
-       JOIN "Vendor" v ON c."vendorId" = v.id
+       LEFT JOIN "Vendor" v ON c."vendorId" = v.id
+       LEFT JOIN "Client" cl ON c."clientId" = cl.id
        LEFT JOIN "ContractMetadata" cm ON cm."contractId" = c.id
        WHERE ${where}
        ORDER BY c."effectiveFrom" DESC NULLS LAST

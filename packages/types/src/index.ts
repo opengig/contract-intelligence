@@ -1,5 +1,6 @@
 export type { User, CreateUserPayload, UpdateUserPayload } from "./user";
 export type { Vendor, CreateVendorPayload } from "./vendor";
+export type { Client, CreateClientPayload } from "./client";
 export type {
   Contract,
   ContractTerm,

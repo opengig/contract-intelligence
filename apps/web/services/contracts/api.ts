@@ -89,6 +89,16 @@ export const contractsApi = {
     return res.json();
   },
 
+  update: async (contractId: string, payload: { vendorId?: string; clientId?: string; name?: string; type?: string }): Promise<Contract> => {
+    const res = await fetch(`${API_BASE}/contracts/${contractId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
+  },
+
   updateTerm: async (contractId: string, termId: string, payload: UpdateTermPayload): Promise<void> => {
     const res = await fetch(`${API_BASE}/contracts/${contractId}/terms/${termId}`, {
       method: 'PATCH',
