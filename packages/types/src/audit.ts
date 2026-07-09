@@ -1,5 +1,5 @@
-export type AuditResultStatus = 'ok' | 'overcharge' | 'review';
-export type AuditLineStatus = 'ok' | 'overcharge' | 'variance' | 'review';
+export type AuditResultStatus = "ok" | "overcharge" | "review";
+export type AuditLineStatus = "ok" | "overcharge" | "variance" | "review";
 
 export interface AuditEvidence {
   invoiceSays: string;

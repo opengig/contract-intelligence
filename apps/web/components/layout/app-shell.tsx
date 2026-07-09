@@ -14,9 +14,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className='flex h-screen overflow-hidden'>
       <Sidebar />
-      <main className="flex-1 overflow-auto">{children}</main>
+      <main className='flex-1 overflow-auto'>{children}</main>
     </div>
   );
 }

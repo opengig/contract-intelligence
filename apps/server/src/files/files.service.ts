@@ -39,13 +39,33 @@ export class FilesService {
       'image/webp',
       'image/bmp',
       'text/csv',
+      'text/plain',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
     ]);
 
-    if (!ALLOWED_MIMES.has(file.mimetype)) {
+    const ALLOWED_EXTS = new Set([
+      '.pdf',
+      '.png',
+      '.jpg',
+      '.jpeg',
+      '.tiff',
+      '.webp',
+      '.bmp',
+      '.csv',
+      '.txt',
+      '.xlsx',
+      '.xls',
+      '.docx',
+      '.doc',
+    ]);
+
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_MIMES.has(file.mimetype) && !ALLOWED_EXTS.has(ext)) {
       throw new BadRequestException(
-        'Unsupported file type. Allowed: PDF, PNG, JPG, TIFF, WEBP, BMP, CSV, XLSX.',
+        'Unsupported file type. Allowed: PDF, PNG, JPG, TIFF, WEBP, BMP, CSV, TXT, XLSX, DOCX.',
       );
     }
   }

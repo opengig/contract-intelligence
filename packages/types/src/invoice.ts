@@ -1,4 +1,4 @@
-export type InvoiceStatus = 'processing' | 'audited' | 'disputed';
+export type InvoiceStatus = "processing" | "audited" | "disputed";
 
 export interface InvoiceLine {
   id: string;

@@ -28,7 +28,11 @@ export class DeepAgentsService {
     messages: UIMessage[],
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     sessionId: string,
-    scope?: { contractId?: string; vendorId?: string },
+    scope?: {
+      contractId?: string;
+      vendorId?: string;
+      routedContractIds?: string[];
+    },
   ): Promise<Response> {
     const systemPrompt = await this.buildSystemPrompt(scope);
 
@@ -620,6 +624,7 @@ export class DeepAgentsService {
   private async buildSystemPrompt(scope?: {
     contractId?: string;
     vendorId?: string;
+    routedContractIds?: string[];
   }): Promise<string> {
     // When vendorId is provided, show ALL vendor contracts in the catalog
     // (even when a specific contractId is selected as default scope).
@@ -630,7 +635,9 @@ export class DeepAgentsService {
           ? { vendorId: scope.vendorId }
           : scope?.contractId
             ? { id: scope.contractId }
-            : {}),
+            : scope?.routedContractIds?.length
+              ? { id: { in: scope.routedContractIds } }
+              : {}),
       },
       select: {
         id: true,
@@ -685,7 +692,9 @@ export class DeepAgentsService {
       ? `\nYou are scoped to a SINGLE contract (id shown in catalog). Only use that contract's data — do NOT search outside it.\n`
       : scope?.vendorId
         ? `\nYou are scoped to a specific vendor. Only use that vendor's contracts.\n`
-        : '';
+        : scope?.routedContractIds?.length
+          ? `\nContracts below were auto-selected as most relevant to the user's query. Search within these first, but use searchContracts if needed for broader results.\n`
+          : '';
 
     return `You are ContractIQ, an expert logistics contract analyst.${scopeNote}
 

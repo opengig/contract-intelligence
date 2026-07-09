@@ -51,8 +51,7 @@ export function useUpdateTerm(contractId: string) {
   return useMutation({
     mutationFn: ({ termId, payload }: { termId: string; payload: UpdateTermPayload }) =>
       contractsApi.updateTerm(contractId, termId, payload),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: contractKeys.detail(contractId) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: contractKeys.detail(contractId) }),
   });
 }
 

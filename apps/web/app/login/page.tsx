@@ -34,10 +34,7 @@ function LoginForm() {
 
     try {
       const endpoint = mode === 'login' ? '/auth/login' : '/auth/register';
-      const body =
-        mode === 'login'
-          ? { email, password }
-          : { email, password, name: name || undefined };
+      const body = mode === 'login' ? { email, password } : { email, password, name: name || undefined };
 
       const res = await fetch(`${API}${endpoint}`, {
         method: 'POST',
@@ -62,105 +59,97 @@ function LoginForm() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm">
+    <div className='flex min-h-screen items-center justify-center bg-background px-4'>
+      <div className='w-full max-w-sm'>
         {/* Logo */}
-        <div className="mb-8 flex flex-col items-center gap-2">
-          <div className="flex items-center gap-2">
-            <Building2 className="size-6 text-primary" />
-            <span className="text-xl font-semibold tracking-tight">ContractIQ</span>
+        <div className='mb-8 flex flex-col items-center gap-2'>
+          <div className='flex items-center gap-2'>
+            <Building2 className='size-6 text-primary' />
+            <span className='text-xl font-semibold tracking-tight'>ContractIQ</span>
           </div>
-          <p className="text-sm text-muted-foreground">Logistics Audit Engine</p>
+          <p className='text-sm text-muted-foreground'>Logistics Audit Engine</p>
         </div>
 
         {/* Card */}
-        <div className="rounded-lg border bg-card p-8 shadow-sm">
-          <h1 className="mb-1 text-lg font-semibold">
-            {mode === 'login' ? 'Sign in' : 'Create account'}
-          </h1>
-          <p className="mb-6 text-sm text-muted-foreground">
-            {mode === 'login'
-              ? 'Enter your credentials to continue'
-              : 'Fill in your details to get started'}
+        <div className='rounded-lg border bg-card p-8 shadow-sm'>
+          <h1 className='mb-1 text-lg font-semibold'>{mode === 'login' ? 'Sign in' : 'Create account'}</h1>
+          <p className='mb-6 text-sm text-muted-foreground'>
+            {mode === 'login' ? 'Enter your credentials to continue' : 'Fill in your details to get started'}
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className='space-y-4'>
             {mode === 'register' && (
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium" htmlFor="name">
+              <div className='space-y-1.5'>
+                <label className='text-sm font-medium' htmlFor='name'>
                   Name
                 </label>
                 <input
-                  id="name"
-                  type="text"
-                  autoComplete="name"
-                  placeholder="Jane Doe"
+                  id='name'
+                  type='text'
+                  autoComplete='name'
+                  placeholder='Jane Doe'
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+                  className='w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40'
                 />
               </div>
             )}
 
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="email">
+            <div className='space-y-1.5'>
+              <label className='text-sm font-medium' htmlFor='email'>
                 Email
               </label>
               <input
-                id="email"
-                type="email"
-                autoComplete="email"
+                id='email'
+                type='email'
+                autoComplete='email'
                 required
-                placeholder="you@example.com"
+                placeholder='you@example.com'
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+                className='w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40'
               />
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="password">
+            <div className='space-y-1.5'>
+              <label className='text-sm font-medium' htmlFor='password'>
                 Password
               </label>
               <input
-                id="password"
-                type="password"
+                id='password'
+                type='password'
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 required
                 minLength={6}
-                placeholder="••••••••"
+                placeholder='••••••••'
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+                className='w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40'
               />
             </div>
 
-            {error && (
-              <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {error}
-              </p>
-            )}
+            {error && <p className='rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive'>{error}</p>}
 
             <button
-              type="submit"
+              type='submit'
               disabled={loading}
-              className="flex w-full items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+              className='flex w-full items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60'
             >
-              {loading && <Loader2 className="size-4 animate-spin" />}
+              {loading && <Loader2 className='size-4 animate-spin' />}
               {mode === 'login' ? 'Sign in' : 'Create account'}
             </button>
           </form>
         </div>
 
         {/* Toggle */}
-        <p className="mt-4 text-center text-sm text-muted-foreground">
+        <p className='mt-4 text-center text-sm text-muted-foreground'>
           {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
           <button
             onClick={() => {
               setMode(mode === 'login' ? 'register' : 'login');
               setError('');
             }}
-            className="font-medium text-primary hover:underline"
+            className='font-medium text-primary hover:underline'
           >
             {mode === 'login' ? 'Register' : 'Sign in'}
           </button>

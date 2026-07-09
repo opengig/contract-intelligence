@@ -11,6 +11,7 @@ export class ContractsRepository {
       orderBy: { createdAt: 'desc' },
       include: {
         vendor: { select: { id: true, name: true } },
+        metadata: { select: { shipper: true } },
         _count: { select: { terms: true } },
       },
     });
@@ -22,6 +23,7 @@ export class ContractsRepository {
       include: {
         vendor: { select: { id: true, name: true } },
         terms: { orderBy: { createdAt: 'asc' } },
+        metadata: true,
       },
     });
   }

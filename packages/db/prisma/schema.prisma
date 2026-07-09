@@ -50,6 +50,9 @@ model Contract {
   extractedText   String?
   effectiveFrom   DateTime?
   effectiveTo     DateTime?
+  summary          String?
+  summaryEmbedding Unsupported("vector(1536)")?
+  metadata         ContractMetadata?
   terms           ContractTerm[]
   chunks          ContractChunk[]
   tables          ContractTable[]
@@ -113,6 +116,30 @@ model ContractTable {
   updatedAt DateTime @updatedAt
 
   @@index([contractId])
+}
+
+// Structured metadata extracted by LLM during ingestion.
+model ContractMetadata {
+  id               String   @id @default(uuid())
+  contractId       String   @unique
+  contract         Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  carrierName      String?
+  carrierScac      String?
+  mode             String?  // "air" | "LTL" | "TL" | "rail" | "ocean" | "parcel" | "intermodal"
+  shipper          String?
+  startDate        DateTime?
+  expirationDate   DateTime?
+  currency         String?
+  divisions        Json?    // string[]
+  originRegions    Json?    // string[] — states/countries
+  destRegions      Json?    // string[] — states/countries
+  rateType         String?  // "per_kg" | "per_mile" | "flat" | "tariff_discount" | "percentage"
+  laneCount        Int?
+  keyTerms         Json?    // string[] — e.g. ["detention", "fuel surcharge", "temperature controlled"]
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 // ─── Invoices ────────────────────────────────────────────────────────────────

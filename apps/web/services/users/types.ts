@@ -1,1 +1,1 @@
-export type { User, CreateUserPayload, UpdateUserPayload } from "@repo/types";
+export type { User, CreateUserPayload, UpdateUserPayload } from '@repo/types';

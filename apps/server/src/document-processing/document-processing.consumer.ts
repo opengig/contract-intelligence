@@ -8,6 +8,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { DocumentParserService } from '@/document-parser/document-parser.service';
 import { DocumentStorageService } from '@/document-storage/document-storage.service';
 import { VectorService } from './vector.service';
+import { MetadataExtractionService } from './metadata-extraction.service';
 import {
   DOCUMENT_PROCESSING_QUEUE,
   DocumentProcessingJobData,
@@ -26,6 +27,7 @@ export class DocumentProcessingConsumer extends WorkerHost {
     private readonly parser: DocumentParserService,
     private readonly storage: DocumentStorageService,
     private readonly vector: VectorService,
+    private readonly metadataExtraction: MetadataExtractionService,
   ) {
     super();
   }
@@ -46,10 +48,21 @@ export class DocumentProcessingConsumer extends WorkerHost {
 
       const ext = path.extname(fileName).toLowerCase();
       const isXlsx = ext === '.xlsx' || ext === '.xls';
+      const isDocx = ext === '.docx' || ext === '.doc';
 
       let parseResult: Awaited<ReturnType<typeof this.parser.refine>>;
 
-      if (isXlsx) {
+      if (isDocx) {
+        if (!fs.existsSync(filePath)) {
+          throw new Error(
+            `File ${storageKey} not found — cannot process. Please re-upload.`,
+          );
+        }
+
+        this.logger.log(`Parsing DOCX: ${filePath}`);
+        parseResult = await this.parser.parse(filePath);
+        this.logger.log(`DOCX parsed: ${parseResult.text.length} chars`);
+      } else if (isXlsx) {
         if (!fs.existsSync(filePath)) {
           throw new Error(
             `File ${storageKey} not found — cannot process. Please re-upload.`,
@@ -112,7 +125,10 @@ export class DocumentProcessingConsumer extends WorkerHost {
       // Step 6 — chunk prose text and store vector embeddings in ContractChunk
       await this.vector.createEmbeddings(contractId);
 
-      // Step 7 — mark active
+      // Step 7 — extract structured metadata + contract summary embedding
+      await this.metadataExtraction.extractAndStore(contractId);
+
+      // Step 8 — mark active
       await this.prisma.contract.update({
         where: { id: contractId },
         data: { status: 'active' },

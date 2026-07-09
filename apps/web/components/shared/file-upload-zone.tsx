@@ -6,20 +6,23 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 
-const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.pdf', '.csv'];
+const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.pdf', '.csv', '.docx', '.doc', '.txt'];
 const ALLOWED_MIME = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
   'application/pdf',
   'text/csv',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword',
+  'text/plain',
 ];
 
 function FileIcon({ name }: { name: string }) {
   const ext = name.split('.').pop()?.toLowerCase();
   if (ext === 'xlsx' || ext === 'xls') {
-    return <FileSpreadsheet className="size-5 text-emerald-600" />;
+    return <FileSpreadsheet className='size-5 text-emerald-600' />;
   }
-  return <FileText className="size-5 text-primary" />;
+  return <FileText className='size-5 text-primary' />;
 }
 
 function formatBytes(bytes: number) {
@@ -30,6 +33,8 @@ function formatBytes(bytes: number) {
 
 interface FileUploadZoneProps {
   onFileSelect: (file: File) => void;
+  onFilesSelect?: (files: File[]) => void;
+  multiple?: boolean;
   accept?: string;
   label?: string;
   description?: string;
@@ -41,9 +46,11 @@ interface FileUploadZoneProps {
 
 export function FileUploadZone({
   onFileSelect,
-  accept = '.xlsx,.xls,.pdf,.csv',
-  label = 'Drop your document here',
-  description = 'PDF, Excel (.xlsx / .xls), or CSV',
+  onFilesSelect,
+  multiple = false,
+  accept = '.xlsx,.xls,.pdf,.csv,.docx,.doc,.txt',
+  label = 'Drop your documents here',
+  description = 'PDF, Excel, Word (.docx), CSV, or TXT',
   selectedFile,
   onClear,
   disabled,
@@ -65,20 +72,28 @@ export function FileUploadZone({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
-      const file = e.dataTransfer.files[0];
-      if (file) {
-        setTypeError(null);
-        if (validate(file)) onFileSelect(file);
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length === 0) return;
+      setTypeError(null);
+      const valid = files.filter(validate);
+      if (multiple && onFilesSelect && valid.length > 0) {
+        onFilesSelect(valid);
+      } else if (valid[0]) {
+        onFileSelect(valid[0]);
       }
     },
-    [onFileSelect, validate],
+    [onFileSelect, onFilesSelect, multiple, validate],
   );
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setTypeError(null);
-      if (validate(file)) onFileSelect(file);
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    setTypeError(null);
+    const valid = files.filter(validate);
+    if (multiple && onFilesSelect && valid.length > 0) {
+      onFilesSelect(valid);
+    } else if (valid[0]) {
+      onFileSelect(valid[0]);
     }
     e.target.value = '';
   };
@@ -86,23 +101,23 @@ export function FileUploadZone({
   if (selectedFile) {
     const isUploading = uploadProgress != null && uploadProgress < 100;
     return (
-      <div className="space-y-2">
-        <div className="flex items-center gap-3 rounded-xl border bg-muted/30 px-4 py-3">
+      <div className='space-y-2'>
+        <div className='flex items-center gap-3 rounded-xl border bg-muted/30 px-4 py-3'>
           <FileIcon name={selectedFile.name} />
-          <div className="flex-1 min-w-0">
-            <p className="truncate text-sm font-medium">{selectedFile.name}</p>
-            <p className="text-xs text-muted-foreground">{formatBytes(selectedFile.size)}</p>
+          <div className='flex-1 min-w-0'>
+            <p className='truncate text-sm font-medium'>{selectedFile.name}</p>
+            <p className='text-xs text-muted-foreground'>{formatBytes(selectedFile.size)}</p>
           </div>
           {!isUploading && onClear && (
-            <Button variant="ghost" size="icon-sm" onClick={onClear} disabled={disabled}>
-              <X className="size-3.5" />
+            <Button variant='ghost' size='icon-sm' onClick={onClear} disabled={disabled}>
+              <X className='size-3.5' />
             </Button>
           )}
         </div>
         {uploadProgress != null && (
-          <div className="space-y-1">
-            <Progress value={uploadProgress} className="h-1.5" />
-            <p className="text-xs text-muted-foreground text-right">
+          <div className='space-y-1'>
+            <Progress value={uploadProgress} className='h-1.5' />
+            <p className='text-xs text-muted-foreground text-right'>
               {uploadProgress < 100 ? `Uploading… ${uploadProgress}%` : 'Upload complete'}
             </p>
           </div>
@@ -112,40 +127,42 @@ export function FileUploadZone({
   }
 
   return (
-    <div className="space-y-2">
+    <div className='space-y-2'>
       <div
-        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDragging(true);
+        }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
         onClick={() => !disabled && inputRef.current?.click()}
         className={cn(
           'flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-10 transition-colors',
-          isDragging
-            ? 'border-primary bg-primary/5'
-            : 'border-border hover:border-primary/50 hover:bg-muted/20',
+          isDragging ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50 hover:bg-muted/20',
           disabled && 'pointer-events-none opacity-50',
         )}
       >
-        <div className="rounded-full bg-muted p-3">
-          <Upload className="size-5 text-muted-foreground" />
+        <div className='rounded-full bg-muted p-3'>
+          <Upload className='size-5 text-muted-foreground' />
         </div>
-        <div className="text-center">
-          <p className="text-sm font-medium">{label}</p>
-          <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+        <div className='text-center'>
+          <p className='text-sm font-medium'>{label}</p>
+          <p className='text-xs text-muted-foreground mt-0.5'>{description}</p>
         </div>
-        <p className="text-xs text-muted-foreground/70">or click to browse</p>
+        <p className='text-xs text-muted-foreground/70'>or click to browse</p>
         <input
           ref={inputRef}
-          type="file"
+          type='file'
           accept={accept}
-          className="hidden"
+          multiple={multiple}
+          className='hidden'
           onChange={handleChange}
           disabled={disabled}
         />
       </div>
       {typeError && (
-        <div className="flex items-center gap-2 text-xs text-destructive">
-          <AlertCircle className="size-3.5 shrink-0" />
+        <div className='flex items-center gap-2 text-xs text-destructive'>
+          <AlertCircle className='size-3.5 shrink-0' />
           {typeError}
         </div>
       )}

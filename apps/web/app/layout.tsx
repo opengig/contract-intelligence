@@ -25,15 +25,10 @@ export const metadata: Metadata = {
   description: 'Contract intelligence and invoice audit for logistics',
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="en"
-      className={cn(fontSans.variable, fontSerif.variable, fontMono.variable)}
-    >
-      <body className="bg-background text-foreground antialiased">
+    <html lang='en' className={cn(fontSans.variable, fontSerif.variable, fontMono.variable)}>
+      <body className='bg-background text-foreground antialiased'>
         <ReactQueryProvider>
           <AppShell>{children}</AppShell>
         </ReactQueryProvider>

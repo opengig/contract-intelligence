@@ -14,20 +14,20 @@ export interface TableMeta {
   headers: string[];
 }
 
-export type ContractType = 'rate_sheet' | 'amendment' | 'surcharge' | 'other';
+export type ContractType = "rate_sheet" | "amendment" | "surcharge" | "other";
 export type ContractStatus =
-  | 'uploaded'
-  | 'parsing'
-  | 'parsed'
-  | 'review'
-  | 'active'
-  | 'error';
-export type ContractTermStatus = 'pending' | 'approved' | 'rejected' | 'review';
+  | "uploaded"
+  | "parsing"
+  | "parsed"
+  | "review"
+  | "active"
+  | "error";
+export type ContractTermStatus = "pending" | "approved" | "rejected" | "review";
 export type ContractTermType =
-  | 'freight_rate'
-  | 'detention'
-  | 'fuel_surcharge'
-  | 'other';
+  | "freight_rate"
+  | "detention"
+  | "fuel_surcharge"
+  | "other";
 
 export interface ContractTerm {
   id: string;
@@ -84,7 +84,7 @@ export interface UpdateTermPayload {
 export interface UploadTarget {
   uploadUrl: string;
   storageKey: string;
-  strategy: 'local' | 'azure';
+  strategy: "local" | "azure";
 }
 
 export interface ContractProcessingStatus {

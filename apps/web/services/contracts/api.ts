@@ -11,19 +11,25 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8081';
 
 export const contractsApi = {
   getAll: async (): Promise<Contract[]> => {
-    const res = await fetch(`${API_BASE}/contracts`, { headers: authHeaders() });
+    const res = await fetch(`${API_BASE}/contracts`, {
+      headers: authHeaders(),
+    });
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
   },
 
   getOne: async (id: string): Promise<Contract> => {
-    const res = await fetch(`${API_BASE}/contracts/${id}`, { headers: authHeaders() });
+    const res = await fetch(`${API_BASE}/contracts/${id}`, {
+      headers: authHeaders(),
+    });
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
   },
 
   getStatus: async (id: string): Promise<ContractProcessingStatus> => {
-    const res = await fetch(`${API_BASE}/contracts/${id}/status`, { headers: authHeaders() });
+    const res = await fetch(`${API_BASE}/contracts/${id}/status`, {
+      headers: authHeaders(),
+    });
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
   },
@@ -42,10 +48,7 @@ export const contractsApi = {
    * Upload a file to the local dev endpoint with progress reporting.
    * Returns the storageKey assigned by the server.
    */
-  uploadLocal: (
-    file: File,
-    onProgress?: (pct: number) => void,
-  ): Promise<{ storageKey: string }> => {
+  uploadLocal: (file: File, onProgress?: (pct: number) => void): Promise<{ storageKey: string }> => {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       const fd = new FormData();
@@ -86,11 +89,7 @@ export const contractsApi = {
     return res.json();
   },
 
-  updateTerm: async (
-    contractId: string,
-    termId: string,
-    payload: UpdateTermPayload,
-  ): Promise<void> => {
+  updateTerm: async (contractId: string, termId: string, payload: UpdateTermPayload): Promise<void> => {
     const res = await fetch(`${API_BASE}/contracts/${contractId}/terms/${termId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },

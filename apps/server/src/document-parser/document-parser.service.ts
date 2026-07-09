@@ -43,6 +43,7 @@ const AZURE_EXTS = new Set([
 ]);
 const TEXT_EXTS = new Set(['.csv', '.txt']);
 const EXCEL_EXTS = new Set(['.xlsx', '.xls']);
+const DOCX_EXTS = new Set(['.docx', '.doc']);
 
 const CHUNK_CHAR_LIMIT = 50_000;
 const LLM_CONCURRENCY = 5;
@@ -119,6 +120,10 @@ export class DocumentParserService {
 
     if (EXCEL_EXTS.has(ext)) {
       return this.extractFromXlsx(filePath);
+    }
+
+    if (DOCX_EXTS.has(ext)) {
+      return this.parseDocx(filePath);
     }
 
     throw new BadRequestException(`Unsupported file type: ${ext}`);
@@ -708,6 +713,15 @@ export class DocumentParserService {
     }
 
     return chunks;
+  }
+
+  private async parseDocx(filePath: string): Promise<ParseResult> {
+    this.logger.log(`Parsing DOCX: ${filePath}`);
+    const mammoth = await import('mammoth');
+    const buffer = fs.readFileSync(filePath);
+    const { value: text } = await mammoth.extractRawText({ buffer });
+    this.logger.log(`DOCX extracted: ${text.length} chars`);
+    return { text };
   }
 
   private parsePlainText(filePath: string): ParseResult {
