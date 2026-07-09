@@ -42,7 +42,7 @@ export class DeepAgentsService {
     const tools = this.buildTools(scopedContractId, scopedVendorId, sessionId);
 
     const result = streamText({
-      model: openai('gpt-4.1'),
+      model: openai('gpt-5.2'),
       system: systemPrompt,
       messages: await convertToModelMessages(messages),
       tools,
@@ -836,8 +836,20 @@ Follow these steps strictly in order. Skipping any step WILL cause column-name e
 ### Step 1 — listTables (always first)
 Call \`listTables\` with the contract id. This returns every table that actually exists in the DB with its real name, columns, and summary. Do NOT assume you know the table name — real names may be completely different from what you expect.
 
-### Step 2 — Pick the right table(s)
-Read each table's \`summary\` and \`columns\` from the listTables response. Decide which table(s) hold the data you need based on what you see, not what you guess.
+### Step 2 — Pick the right table(s) — COLLECT ALL CANDIDATES
+Read each table's \`summary\` and \`columns\` from the listTables response.
+
+**MANDATORY — collect every table that could contain the answer BEFORE executing any code:**
+Large contracts (especially LTL/freight rate sheets) split one logical table across many pages during PDF extraction, producing multiple DB tables with identical or near-identical column sets. Table names and summaries are generated independently per page group and will differ even when the underlying data is the same — do NOT use name similarity to decide if two tables are siblings.
+
+**The only reliable signal is the \`columns\` array returned by listTables.**
+
+Rules:
+1. Your first candidate is the table whose summary best matches the query.
+2. Look at its \`columns\` array. Then scan every other table in the listTables response and compare \`columns\` arrays. Any table whose columns overlap significantly (≥ 4 shared column names) is a sibling — it contains a different row range of the same logical table.
+3. Collect the names of ALL siblings into a list regardless of how different their names sound. "Freight Discounts and Minimum Charges by Territory, Geography, and Weight Group" and "Regional Freight Discount Matrix by Territory and Tier" are siblings if they share columns like Territory, Geography, Payer Type, Discount, Minimum Charge.
+4. You MUST search every sibling in a **single** executeCode call using the MULTI-TABLE SEARCH PATTERN in Step 4. Searching one table per executeCode call is FORBIDDEN for rate/discount lookups.
+5. **NEVER search just one candidate and report "not found".** Searching siblings only after a miss is also FORBIDDEN — identify all siblings in Step 2, then search them all at once.
 
 ### Step 3 — getTableSample (MANDATORY, never skip)
 Call \`getTableSample\` using the EXACT \`tableName\` string from Step 1's response.
@@ -893,6 +905,41 @@ Every \`executeCode\` call starts a brand-new Python process. Variables, DataFra
 1. First call: run \`list_tables(CONTRACT_ID)\` to discover tables + print columns.
 2. Read the output to confirm exact column names and value formats.
 3. Second call: **re-load the table with \`get_table()\`**, then do full analysis. Do NOT reference variables from Call 1.
+
+**MULTI-TABLE SEARCH PATTERN — MANDATORY first attempt for any rate/discount lookup. Not a fallback.**
+Identify siblings in Step 2, then run this pattern as your FIRST executeCode call. Do NOT run a single-table script first and fall back to this on a miss.
+Search ALL candidate tables in one script. Never stop at the first non-empty result — collect from all tables.
+\`\`\`python
+CONTRACT_ID = '<exact id>'
+
+# List every sibling table identified in Step 2
+CANDIDATE_TABLE_NAMES = [
+    'Freight Discounts and Minimum Charges by Territory ...',
+    'Regional Freight Discount Matrix by Territory ...',
+    'ABCD+ Matrix Freight Rate Discounts ...',
+    # add every same-schema sibling here
+]
+
+all_results = []
+for tname in CANDIDATE_TABLE_NAMES:
+    try:
+        name, df = get_table(CONTRACT_ID, tname)
+        # Apply your filter — e.g. search for FWA in Territory column
+        col = df['Territory'].astype(str).str.strip()
+        match = df[col.str.contains('FWA', case=False, na=False)]
+        if not match.empty:
+            print(f"=== FOUND in '{name}' ({len(match)} rows) ===")
+            print(match.to_string())
+            all_results.append(match)
+        else:
+            print(f"  No match in '{name}' ({len(df)} rows total)")
+    except Exception as e:
+        print(f"  Could not load '{tname}': {e}")
+
+if not all_results:
+    print("NOT FOUND in any candidate table.")
+\`\`\`
+This pattern is MANDATORY when sibling tables exist. Do not write a loop that stops on the first non-empty result — collect from ALL tables and then present the combined findings.
 
 **CRITICAL coding rules:**
 - ALWAYS use \`df['Column Name']\` (brackets) — NEVER \`df.ColumnName\` (dots break on spaces/special chars).

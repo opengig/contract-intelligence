@@ -512,7 +512,7 @@ function ToolCallsGroup({ toolParts }: { toolParts: Record<string, any>[] }) {
             const hasContent = result != null;
 
             return (
-              <div key={part.toolInvocationId ?? part.toolCallId ?? `tool-${idx}`}>
+              <div key={part.toolInvocationId ?? part.toolCallId ?? `tool-${idx}`} className='w-full'>
                 <button
                   type='button'
                   onClick={() => hasContent && setExpandedIdx(isOpen ? null : idx)}

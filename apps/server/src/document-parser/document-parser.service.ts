@@ -465,7 +465,15 @@ export class DocumentParserService {
       this.logger.log(
         `After horizontal merge: ${horizontallyMerged.length} table(s) (was ${allNamed.length})`,
       );
-      return horizontallyMerged;
+
+      // Vertical continuation merge: tables spanning many pages produce one output
+      // per LLM group window; stitch consecutive outputs with identical headers.
+      const verticallyMerged =
+        this.mergeVerticalContinuations(horizontallyMerged);
+      this.logger.log(
+        `After vertical merge: ${verticallyMerged.length} table(s) (was ${horizontallyMerged.length})`,
+      );
+      return verticallyMerged;
     } catch (err) {
       this.logger.error(
         `Table grouping failed — using fallback names: ${(err as Error).message}`,
@@ -478,6 +486,68 @@ export class DocumentParserService {
         textContent: t.text,
       }));
     }
+  }
+
+  /**
+   * Merge consecutive tables that are vertical continuations of the same logical table.
+   * A table spanning many pages produces one output per LLM group window; this stitches
+   * those outputs together when they share identical headers (column structure).
+   *
+   * Two tables are considered continuations when:
+   * - Their headers are identical (same count, same values in order), OR
+   * - One is a strict subset prefix of the other (handles minor Azure DI column drift)
+   */
+  private mergeVerticalContinuations(
+    tables: ExtractedTable[],
+  ): ExtractedTable[] {
+    if (tables.length < 2) return tables;
+
+    const headersKey = (t: ExtractedTable): string =>
+      t.headers.map((h) => h.trim().toLowerCase()).join('||');
+
+    const areCompatible = (a: ExtractedTable, b: ExtractedTable): boolean => {
+      if (headersKey(a) === headersKey(b)) return true;
+      // Allow minor column count drift (±1 col) when the shared columns match
+      const shorter = a.headers.length <= b.headers.length ? a : b;
+      const longer = a.headers.length <= b.headers.length ? b : a;
+      if (longer.headers.length - shorter.headers.length > 1) return false;
+      return shorter.headers.every(
+        (h, i) =>
+          h.trim().toLowerCase() === longer.headers[i]?.trim().toLowerCase(),
+      );
+    };
+
+    const result: ExtractedTable[] = [];
+    let current = tables[0];
+
+    for (let i = 1; i < tables.length; i++) {
+      const next = tables[i];
+      if (areCompatible(current, next)) {
+        // Prefer the longer header set; concatenate rows and text
+        const mergedHeaders =
+          current.headers.length >= next.headers.length
+            ? current.headers
+            : next.headers;
+
+        this.logger.log(
+          `Vertical merge: "${current.name}" (${current.rows.length} rows) + "${next.name}" (${next.rows.length} rows)`,
+        );
+
+        current = {
+          name: current.name,
+          summary: current.summary,
+          headers: mergedHeaders,
+          rows: [...current.rows, ...next.rows],
+          textContent: `${current.textContent}\n${next.textContent}`,
+        };
+      } else {
+        result.push(current);
+        current = next;
+      }
+    }
+    result.push(current);
+
+    return result;
   }
 
   /**
