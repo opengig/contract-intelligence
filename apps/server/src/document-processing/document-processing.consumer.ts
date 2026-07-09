@@ -49,6 +49,7 @@ export class DocumentProcessingConsumer extends WorkerHost {
       const ext = path.extname(fileName).toLowerCase();
       const isXlsx = ext === '.xlsx' || ext === '.xls';
       const isDocx = ext === '.docx' || ext === '.doc';
+      const isPlainText = ext === '.txt' || ext === '.csv';
 
       let parseResult: Awaited<ReturnType<typeof this.parser.refine>>;
 
@@ -74,6 +75,16 @@ export class DocumentProcessingConsumer extends WorkerHost {
         this.logger.log(
           `XLSX parsed: ${parseResult.text.length} chars, ${parseResult.tables?.length ?? 0} sheet(s)`,
         );
+      } else if (isPlainText) {
+        if (!fs.existsSync(filePath)) {
+          throw new Error(
+            `File ${storageKey} not found — cannot process. Please re-upload.`,
+          );
+        }
+
+        this.logger.log(`Parsing plain text: ${filePath}`);
+        parseResult = await this.parser.parse(filePath);
+        this.logger.log(`Plain text parsed: ${parseResult.text.length} chars`);
       } else {
         const ocrCachePath = `${filePath}.ocr.json`;
 
