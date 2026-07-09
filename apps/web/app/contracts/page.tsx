@@ -14,10 +14,14 @@ import {
   RotateCcw,
   ExternalLink,
   Loader2,
+  Pencil,
+  Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
@@ -25,9 +29,12 @@ import {
   useGetContract,
   useDeleteContract,
   useUpdateTerm,
+  useUpdateContract,
   useActivateContract,
   useReprocessContract,
 } from '@/services/contracts/hooks';
+import { useGetVendors, useCreateVendor } from '@/services/vendors/hooks';
+import { useGetClients, useCreateClient } from '@/services/clients/hooks';
 import type { Contract, ContractTerm, ContractTermStatus } from '@repo/types';
 
 const NO_REPROCESS_PERMISSION_MSG = "You don't have permission to reprocess contracts";
@@ -219,6 +226,7 @@ function ContractSidesheet({
 }) {
   const { data: contract, isLoading } = useGetContract(contractId);
   const { mutate: updateTerm } = useUpdateTerm(contractId);
+  const { mutate: updateContract } = useUpdateContract(contractId);
   const { mutate: activate, isPending: activating } = useActivateContract(contractId);
 
   const terms = contract?.terms ?? [];
@@ -235,7 +243,25 @@ function ContractSidesheet({
           ) : (
             <>
               <p className='font-semibold truncate'>{contract?.name}</p>
-              <p className='text-xs text-muted-foreground truncate'>{(contract as any)?.vendor?.name}</p>
+              <div className='flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5'>
+                <EditableEntity
+                  label='Vendor'
+                  currentId={(contract as any)?.vendor?.id}
+                  currentName={(contract as any)?.vendor?.name}
+                  useGetAll={useGetVendors}
+                  useCreate={useCreateVendor}
+                  onSave={(vendorId) => updateContract({ vendorId })}
+                />
+                <span>·</span>
+                <EditableEntity
+                  label='Client'
+                  currentId={(contract as any)?.client?.id}
+                  currentName={(contract as any)?.client?.name}
+                  useGetAll={useGetClients}
+                  useCreate={useCreateClient}
+                  onSave={(clientId) => updateContract({ clientId })}
+                />
+              </div>
             </>
           )}
         </div>
@@ -286,6 +312,14 @@ function ContractSidesheet({
                 <span className='truncate text-xs font-mono'>{contract.fileName}</span>
               </MetaItem>
             </div>
+
+            {/* AI Metadata */}
+            {(contract as any).metadata && (
+              <SidesheetMetadataCard
+                metadata={(contract as any).metadata}
+                summary={(contract as any).summary}
+              />
+            )}
 
             {/* Terms summary */}
             {terms.length > 0 && (
@@ -456,4 +490,183 @@ function ConfidenceBadge({ confidence }: { confidence: number }) {
   if (pct >= 90) return <Badge variant='success'>{pct}%</Badge>;
   if (pct >= 75) return <Badge variant='warning'>{pct}%</Badge>;
   return <Badge variant='destructive'>{pct}%</Badge>;
+}
+
+interface ContractMetadata {
+  carrierName?: string | null;
+  carrierScac?: string | null;
+  mode?: string | null;
+  shipper?: string | null;
+  startDate?: string | null;
+  expirationDate?: string | null;
+  currency?: string | null;
+  divisions?: string[] | null;
+  originRegions?: string[] | null;
+  destRegions?: string[] | null;
+  rateType?: string | null;
+  laneCount?: number | null;
+  keyTerms?: string[] | null;
+}
+
+function SidesheetMetadataCard({ metadata, summary }: { metadata: ContractMetadata; summary?: string | null }) {
+  const fields: { label: string; value: string | null | undefined }[] = [
+    { label: 'Carrier', value: metadata.carrierName },
+    { label: 'SCAC', value: metadata.carrierScac },
+    { label: 'Mode', value: metadata.mode?.toUpperCase() },
+    { label: 'Shipper', value: metadata.shipper },
+    { label: 'Start', value: metadata.startDate ? new Date(metadata.startDate).toLocaleDateString('en-US') : null },
+    { label: 'Expiry', value: metadata.expirationDate ? new Date(metadata.expirationDate).toLocaleDateString('en-US') : null },
+    { label: 'Currency', value: metadata.currency },
+    { label: 'Rate Type', value: metadata.rateType?.replace('_', ' ') },
+    { label: 'Lanes', value: metadata.laneCount?.toString() },
+  ];
+  const filledFields = fields.filter((f) => f.value);
+  if (filledFields.length === 0 && !summary && !metadata.originRegions?.length && !metadata.destRegions?.length && !metadata.divisions?.length && !metadata.keyTerms?.length) return null;
+
+  return (
+    <div className='px-5 py-4 border-b space-y-3'>
+      <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>AI Metadata</p>
+      {summary && <p className='text-xs text-muted-foreground italic'>{summary}</p>}
+      {filledFields.length > 0 && (
+        <div className='grid grid-cols-2 gap-2'>
+          {filledFields.map(({ label, value }) => (
+            <div key={label}>
+              <p className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>{label}</p>
+              <p className='text-xs font-medium'>{value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {metadata.originRegions && metadata.originRegions.length > 0 && (
+        <div>
+          <p className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1'>Origin Regions</p>
+          <div className='flex flex-wrap gap-1'>{metadata.originRegions.map((r) => <Badge key={r} variant='secondary' className='text-xs'>{r}</Badge>)}</div>
+        </div>
+      )}
+      {metadata.destRegions && metadata.destRegions.length > 0 && (
+        <div>
+          <p className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1'>Dest Regions</p>
+          <div className='flex flex-wrap gap-1'>{metadata.destRegions.map((r) => <Badge key={r} variant='secondary' className='text-xs'>{r}</Badge>)}</div>
+        </div>
+      )}
+      {metadata.divisions && metadata.divisions.length > 0 && (
+        <div>
+          <p className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1'>Divisions</p>
+          <div className='flex flex-wrap gap-1'>{metadata.divisions.map((d) => <Badge key={d} variant='outline' className='text-xs'>{d}</Badge>)}</div>
+        </div>
+      )}
+      {metadata.keyTerms && metadata.keyTerms.length > 0 && (
+        <div>
+          <p className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1'>Key Terms</p>
+          <div className='flex flex-wrap gap-1'>{metadata.keyTerms.map((t) => <Badge key={t} variant='outline' className='text-xs'>{t}</Badge>)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EditableEntity({
+  label,
+  currentId,
+  currentName,
+  useGetAll,
+  useCreate,
+  onSave,
+}: {
+  label: string;
+  currentId?: string;
+  currentName?: string;
+  useGetAll: () => { data?: Array<{ id: string; name: string }> };
+  useCreate: () => { mutateAsync: (payload: { name: string }) => Promise<{ id: string; name: string }> };
+  onSave: (id: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+  const { data: items } = useGetAll();
+  const { mutateAsync: create } = useCreate();
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        className='inline-flex items-center gap-1 hover:text-foreground transition-colors group'
+        title={`Edit ${label}`}
+      >
+        <span>{currentName ?? `No ${label}`}</span>
+        <Pencil className='size-3 opacity-0 group-hover:opacity-100 transition-opacity' />
+      </button>
+    );
+  }
+
+  if (creating) {
+    return (
+      <span className='inline-flex items-center gap-1'>
+        <Input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder={`New ${label}`}
+          className='h-5 w-28 text-xs'
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') { setCreating(false); setNewName(''); }
+            if (e.key === 'Enter' && newName.trim()) {
+              create({ name: newName.trim() }).then((entity) => {
+                onSave(entity.id);
+                setCreating(false);
+                setEditing(false);
+                setNewName('');
+              });
+            }
+          }}
+        />
+        <button
+          onClick={() => {
+            if (!newName.trim()) return;
+            create({ name: newName.trim() }).then((entity) => {
+              onSave(entity.id);
+              setCreating(false);
+              setEditing(false);
+              setNewName('');
+            });
+          }}
+          className='rounded p-0.5 text-primary hover:bg-primary/10'
+        >
+          <Check className='size-3' />
+        </button>
+        <button onClick={() => { setCreating(false); setNewName(''); }} className='rounded p-0.5 text-muted-foreground hover:bg-muted'>
+          <X className='size-3' />
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className='inline-flex items-center gap-1'>
+      <Select
+        value={currentId ?? ''}
+        onValueChange={(val) => {
+          if (val === '__new__') { setCreating(true); }
+          else { onSave(val); setEditing(false); }
+        }}
+      >
+        <SelectTrigger className='h-5 w-32 text-xs'>
+          <SelectValue placeholder={`Select ${label}…`} />
+        </SelectTrigger>
+        <SelectContent>
+          {items?.map((item) => (
+            <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>
+          ))}
+          <SelectItem value='__new__'>
+            <span className='flex items-center gap-1 text-primary'>
+              <Plus className='size-3' /> Create new
+            </span>
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      <button onClick={() => setEditing(false)} className='rounded p-0.5 text-muted-foreground hover:bg-muted'>
+        <X className='size-3' />
+      </button>
+    </span>
+  );
 }

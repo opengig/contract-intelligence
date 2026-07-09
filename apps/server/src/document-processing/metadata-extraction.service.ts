@@ -85,6 +85,14 @@ const metadataSchema = z.object({
     ),
 });
 
+// Returns true if a and b share at least one meaningful word (≥4 chars)
+function nameOverlaps(a: string, b: string): boolean {
+  const words = (s: string) =>
+    s.toLowerCase().match(/[a-z]{4,}/g) ?? [];
+  const bWords = new Set(words(b));
+  return words(a).some((w) => bWords.has(w));
+}
+
 @Injectable()
 export class MetadataExtractionService {
   private readonly logger = new Logger(MetadataExtractionService.name);
@@ -201,11 +209,13 @@ export class MetadataExtractionService {
           "updatedAt" = NOW()
       `;
 
-      // Resolve vendor
+      // Resolve vendor — validate LLM match has real name overlap before trusting it
       let resolvedVendorId: string | null = null;
-      if (object.vendorMatch) {
+      if (object.vendorMatch && object.carrierName) {
         const match = vendors.find((v) => v.name === object.vendorMatch);
-        if (match) resolvedVendorId = match.id;
+        if (match && nameOverlaps(object.carrierName, match.name)) {
+          resolvedVendorId = match.id;
+        }
       }
       if (!resolvedVendorId && object.carrierName) {
         const newVendor = await this.prisma.vendor.create({
@@ -214,11 +224,13 @@ export class MetadataExtractionService {
         resolvedVendorId = newVendor.id;
       }
 
-      // Resolve client
+      // Resolve client — same validation
       let resolvedClientId: string | null = null;
-      if (object.clientMatch) {
+      if (object.clientMatch && object.shipper) {
         const match = clients.find((c) => c.name === object.clientMatch);
-        if (match) resolvedClientId = match.id;
+        if (match && nameOverlaps(object.shipper, match.name)) {
+          resolvedClientId = match.id;
+        }
       }
       if (!resolvedClientId && object.shipper) {
         const newClient = await this.prisma.client.create({
