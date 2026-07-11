@@ -43,13 +43,13 @@ interface ContractOption {
 }
 
 const SUGGESTIONS = [
-  'What is the lane ID for shipments from Val de Reuil to Casablanca?',
-  'For Lane 0202, what are the origin, destination, Incoterm, service type, stackability, and temperature range?',
-  'Which lanes are DTP from France to Israel?',
-  'For Lane 0202 to Tel Aviv, show the primary and secondary carrier options?',
-  'What is the primary rate for a 400 kg shipment on Lane 0139?',
-  'Calculate the freight for a 20 kg shipment on Lane 0202B, including minimum charge logic.',
-  'Which lanes require +2°C/+8°C temperature control?',
+  'Identify the active LTL pricing agreement as of 02/01/2024 and extract carrier, shipper, SCAC, mode, effective date, and document type.',
+  'For client Ecolab and vendor C.H. Robinson, what are the LTL rates for lane 60431 to zone 606?',
+  'For Boeing and AIT Worldwide Logistics, extract the full air-rate row for Chicago ORD to Abu Dhabi AUH.',
+  'How is the LTL fuel surcharge calculated under Exhibit C for FedEx?',
+  'Compare Ecolab\'s CAT Global TL rates from Chicago IL 60638 to Burlington ON — which amendment governs each term?',
+  'For client Ecolab and vendor Dugan Truck Line, extract the full rate-card row for Lane ID 9196.',
+  'What accessorial charges apply for detention and hazmat under the latest CAT Global amendment?',
 ];
 
 /* ---- tool metadata ---- */

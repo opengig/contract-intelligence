@@ -70,7 +70,7 @@ export class ContractRouterService {
   private async extractIntent(query: string) {
     try {
       const { object } = await generateObject({
-        model: openai('gpt-4.1-mini'),
+        model: openai('gpt-4.1'),
         system:
           'Extract search intent from a logistics contract query. Only fill fields explicitly mentioned.',
         prompt: query,

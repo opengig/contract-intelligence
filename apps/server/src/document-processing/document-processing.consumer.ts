@@ -71,7 +71,7 @@ export class DocumentProcessingConsumer extends WorkerHost {
         }
 
         this.logger.log(`Parsing XLSX directly: ${filePath}`);
-        parseResult = this.parser.extractFromXlsx(filePath);
+        parseResult = await this.parser.extractFromXlsx(filePath);
         this.logger.log(
           `XLSX parsed: ${parseResult.text.length} chars, ${parseResult.tables?.length ?? 0} sheet(s)`,
         );

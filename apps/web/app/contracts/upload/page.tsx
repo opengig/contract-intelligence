@@ -201,88 +201,22 @@ export default function ContractUploadPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{hasStarted ? 'Processing Contracts' : 'Select Documents'}</CardTitle>
+          <CardTitle>Upload Temporarily Disabled</CardTitle>
           <CardDescription>
-            {hasStarted
-              ? 'AI is extracting data from your documents'
-              : 'Upload contract PDFs, Word docs (.docx), Excel files, or text files'}
+            Document upload is currently disabled while we improve the ingestion pipeline.
           </CardDescription>
         </CardHeader>
         <CardContent className='space-y-4'>
-          {!hasStarted && (
-            <FileUploadZone
-              onFileSelect={(f) => handleFilesSelect([f])}
-              onFilesSelect={handleFilesSelect}
-              multiple
-            />
-          )}
-
-          {files.length > 0 && (
-            <div className='space-y-2'>
-              {!hasStarted && (
-                <p className='text-xs font-medium text-muted-foreground'>
-                  {files.length} file{files.length !== 1 ? 's' : ''} selected
-                </p>
-              )}
-              <div className='space-y-1.5 max-h-80 overflow-y-auto'>
-                {files.map((entry) => (
-                  <div key={entry.id} className='flex items-center gap-3 rounded-lg border px-4 py-3'>
-                    <FileIcon name={entry.file.name} />
-                    <div className='flex-1 min-w-0'>
-                      <p className='text-sm font-medium truncate'>{entry.file.name}</p>
-                      {hasStarted ? (
-                        <FileProcessingStatus entry={entry} />
-                      ) : (
-                        <p className='text-[10px] text-muted-foreground'>{formatBytes(entry.file.size)}</p>
-                      )}
-                    </div>
-                    {!hasStarted && (
-                      <Button variant='ghost' size='icon-sm' onClick={() => removeFile(entry.id)}>
-                        <X className='size-3.5' />
-                      </Button>
-                    )}
-                    {entry.status === 'active' && (
-                      <Badge variant='success' className='shrink-0'>Done</Badge>
-                    )}
-                    {entry.status === 'error' && (
-                      <Badge variant='destructive' className='shrink-0'>Failed</Badge>
-                    )}
-                    {hasStarted && entry.status !== 'active' && entry.status !== 'error' && (
-                      <Loader2 className='size-4 animate-spin text-muted-foreground shrink-0' />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {!hasStarted && (
-            <Button className='w-full' onClick={handleProcess} disabled={files.length === 0 || isProcessing}>
-              {isProcessing ? (
-                <>
-                  <Loader2 className='size-4 animate-spin' />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <Zap className='size-4' />
-                  Upload & Process{files.length > 0 ? ` (${files.length})` : ''}
-                </>
-              )}
-            </Button>
-          )}
-
-          {allDone && (
-            <Button className='w-full' asChild>
-              <Link href='/contracts'>View All Contracts</Link>
-            </Button>
-          )}
-
-          {hasStarted && !allDone && (
-            <p className='text-center text-xs text-muted-foreground'>
-              Processing usually takes 10-60 seconds per file. You can leave this page — processing continues in the background.
+          <div className='flex flex-col items-center gap-3 py-8 text-center'>
+            <AlertCircle className='size-8 text-muted-foreground' />
+            <p className='text-sm text-muted-foreground max-w-md'>
+              We are enhancing document parsing to better handle complex spreadsheet formats,
+              multi-row headers, and metadata extraction. Upload will be re-enabled soon.
             </p>
-          )}
+            <Button variant='outline' asChild>
+              <Link href='/contracts'>View Existing Contracts</Link>
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>

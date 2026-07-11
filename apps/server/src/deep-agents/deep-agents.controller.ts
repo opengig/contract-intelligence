@@ -31,12 +31,26 @@ export class DeepAgentsController {
     if (contractId || vendorId) {
       scope = { contractId, vendorId };
     } else {
-      // Auto-route: use the last user message to find relevant contracts
-      const lastUserMsg = [...messages]
+      // Auto-route: build routing query from recent conversation context + latest message
+      const recentUserMsgs = [...messages]
         .reverse()
-        .find((m: any) => m.role === 'user');
-      const queryText =
-        lastUserMsg?.parts?.find((p: any) => p.type === 'text')?.text ?? '';
+        .filter((m: any) => m.role === 'user')
+        .slice(0, 3);
+      const latestText =
+        recentUserMsgs[0]?.parts?.find((p: any) => p.type === 'text')?.text ??
+        '';
+      // Include prior user messages as context so the router can infer the vendor/client
+      // when the latest message omits them (e.g. "How is fuel calculated under Exhibit C?")
+      const contextTexts = recentUserMsgs
+        .slice(1)
+        .map(
+          (m: any) =>
+            m.parts?.find((p: any) => p.type === 'text')?.text ?? '',
+        )
+        .filter(Boolean);
+      const queryText = contextTexts.length
+        ? `${latestText}\n\n[Prior context: ${contextTexts.join(' | ')}]`
+        : latestText;
 
       if (queryText) {
         const routed = await this.router.routeQuery(queryText, 5);
@@ -117,11 +131,23 @@ export class DeepAgentsController {
     if (contractId || vendorId) {
       scope = { contractId, vendorId };
     } else {
-      const lastUserMsg = [...messages]
+      const recentUserMsgs = [...messages]
         .reverse()
-        .find((m: any) => m.role === 'user');
-      const queryText =
-        lastUserMsg?.parts?.find((p: any) => p.type === 'text')?.text ?? '';
+        .filter((m: any) => m.role === 'user')
+        .slice(0, 3);
+      const latestText =
+        recentUserMsgs[0]?.parts?.find((p: any) => p.type === 'text')?.text ??
+        '';
+      const contextTexts = recentUserMsgs
+        .slice(1)
+        .map(
+          (m: any) =>
+            m.parts?.find((p: any) => p.type === 'text')?.text ?? '',
+        )
+        .filter(Boolean);
+      const queryText = contextTexts.length
+        ? `${latestText}\n\n[Prior context: ${contextTexts.join(' | ')}]`
+        : latestText;
 
       if (queryText) {
         const routed = await this.router.routeQuery(queryText, 5);

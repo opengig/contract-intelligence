@@ -15,7 +15,11 @@ const metadataSchema = z.object({
   carrierScac: z
     .string()
     .nullable()
-    .describe('Standard Carrier Alpha Code if mentioned (e.g. "FXFE", "DGTL")'),
+    .describe(
+      'Standard Carrier Alpha Code (2-4 letter code). Look in: ' +
+        'table columns named "SCAC", prose text, agreement headers, and signature blocks. ' +
+        'Examples: "FXFE" (FedEx), "DGTL" (Dugan), "RBRL" (C.H. Robinson).',
+    ),
   mode: z
     .enum(['air', 'LTL', 'TL', 'rail', 'ocean', 'parcel', 'intermodal'])
     .nullable()
@@ -23,11 +27,22 @@ const metadataSchema = z.object({
   shipper: z
     .string()
     .nullable()
-    .describe('The shipper/customer name (e.g. "Ecolab", "Boeing")'),
+    .describe(
+      'The shipper/customer/buyer/client name — the company that is purchasing transport services. ' +
+        'In RFP documents, this is the company issuing the RFP (e.g. "Boeing", "Ecolab"). ' +
+        'Look for: company issuing the bid, email domains (@boeing.com), signature blocks, ' +
+        '"SHIPPER", "CUSTOMER", "CLIENT", "BUYER", or the company evaluating proposals.',
+    ),
   startDate: z
     .string()
     .nullable()
-    .describe('Contract effective start date in ISO format (YYYY-MM-DD)'),
+    .describe(
+      'Contract/amendment effective start date in ISO format (YYYY-MM-DD). ' +
+        'PRIORITY ORDER: (1) explicit "Effective Date" or "Amendment Effective Date" text, ' +
+        '(2) date in the document/contract name (e.g. "02 01 2024 Pricing Agreement" → 2024-02-01), ' +
+        '(3) "Term" start date. ' +
+        'Do NOT use the signing/execution date from signature blocks — that is when parties signed, not when the contract takes effect.',
+    ),
   expirationDate: z
     .string()
     .nullable()
@@ -64,8 +79,19 @@ const metadataSchema = z.object({
       'Key contract features like "detention", "fuel surcharge", "temperature controlled", "hazmat"',
     ),
   contractType: z
-    .enum(['rate_sheet', 'amendment', 'surcharge', 'other'])
-    .describe('The type of this contract document'),
+    .enum([
+      'rate_sheet',
+      'amendment',
+      'surcharge',
+      'master_agreement',
+      'correspondence',
+      'other',
+    ])
+    .describe(
+      'Document type. Use "correspondence" for emails, internal memos, retraction notices, ' +
+        'cover letters, or any non-binding communication. Use "rate_sheet" only for documents ' +
+        'containing actual pricing/rate data. Use "other" only as a last resort.',
+    ),
   vendorMatch: z
     .string()
     .nullable()
@@ -87,8 +113,7 @@ const metadataSchema = z.object({
 
 // Returns true if a and b share at least one meaningful word (≥4 chars)
 function nameOverlaps(a: string, b: string): boolean {
-  const words = (s: string) =>
-    s.toLowerCase().match(/[a-z]{4,}/g) ?? [];
+  const words = (s: string) => s.toLowerCase().match(/[a-z]{4,}/g) ?? [];
   const bWords = new Set(words(b));
   return words(a).some((w) => bWords.has(w));
 }
@@ -154,21 +179,47 @@ export class MetadataExtractionService {
       `--- TABLES ---\n${tableContext}`;
 
     this.logger.log(`Extracting metadata for contract ${contractId}`);
+    this.logger.debug(
+      `Text snippet (first 500 chars): ${textSnippet.slice(0, 500)}`,
+    );
 
     try {
       const { object } = await generateObject({
-        model: openai('gpt-4.1-mini'),
+        model: openai('gpt-5.2'),
         system:
-          'You extract structured metadata from logistics/freight contracts. ' +
+          'You extract structured metadata from logistics/freight contracts and RFPs. ' +
           'Be precise — only fill fields you can confirm from the text. ' +
           'For dates, use ISO format (YYYY-MM-DD). ' +
           'For SCAC codes, only include if explicitly mentioned. ' +
-          'The summary should be useful for search — mention carrier, mode, geography, and date range. ' +
+          'The summary should be useful for search — mention carrier, mode, geography, and date range.\n\n' +
+          'DATE EXTRACTION — CRITICAL:\n' +
+          'The startDate is the EFFECTIVE DATE, NOT the signing/execution date.\n' +
+          '- "Agreement Effective Date: February 1, 2024" → startDate = 2024-02-01\n' +
+          '- Contract name "02 01 2024 Pricing Agreement" → startDate = 2024-02-01\n' +
+          '- Dates next to "Date" labels in signature blocks are SIGNING dates — do NOT use them as startDate.\n' +
+          '- If the document says "executed as of the Amendment Effective Date" but has a separate signing date, the effective date takes priority.\n\n' +
+          'SHIPPER IDENTIFICATION — CRITICAL:\n' +
+          'The "shipper" field = the company BUYING transport services (the client/customer).\n' +
+          'This is NOT the carrier/forwarder providing the service.\n' +
+          'In RFP/bid documents, the shipper is the company ISSUING the RFP.\n' +
+          'Extraction signals (use ANY of these):\n' +
+          '  - Email domains in contact info: @boeing.com → shipper is "Boeing"\n' +
+          '  - "X will evaluate proposals" → X is the shipper\n' +
+          '  - "Pricing Instructions" sheets belong to the shipper\n' +
+          '  - Labels: SHIPPER, CUSTOMER, CLIENT, BUYER in agreement text\n' +
+          '  - The company whose employees are listed as contacts for the RFP\n' +
+          'You MUST set shipper if ANY of these signals are present. Do NOT leave it null when a company name is identifiable.\n\n' +
           'For vendorMatch: if the carrier in this document matches one of the existing vendors (even with slightly different spelling/casing), return that EXACT name from the list. Otherwise null. ' +
           'For clientMatch: if the shipper/customer matches one of the existing clients (even with slightly different spelling/casing), return that EXACT name from the list. Otherwise null.',
         prompt,
         schema: metadataSchema,
       });
+
+      this.logger.log(
+        `Metadata extraction result for ${contractId}: ` +
+          `shipper=${object.shipper}, carrier=${object.carrierName}, ` +
+          `mode=${object.mode}, type=${object.contractType}`,
+      );
 
       // Store metadata
       await this.prisma.$executeRaw`
@@ -243,10 +294,14 @@ export class MetadataExtractionService {
       await this.prisma.contract.update({
         where: { id: contractId },
         data: {
-          ...(resolvedVendorId && !contract.vendor ? { vendorId: resolvedVendorId } : {}),
+          ...(resolvedVendorId && !contract.vendor
+            ? { vendorId: resolvedVendorId }
+            : {}),
           ...(resolvedClientId ? { clientId: resolvedClientId } : {}),
           type: object.contractType,
-          ...(object.startDate ? { effectiveFrom: new Date(object.startDate) } : {}),
+          ...(object.startDate
+            ? { effectiveFrom: new Date(object.startDate) }
+            : {}),
         },
       });
 

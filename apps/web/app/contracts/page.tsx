@@ -79,12 +79,19 @@ export default function ContractsPage() {
             <h1 className='text-2xl font-bold'>Contract Catalog</h1>
             <p className='text-muted-foreground mt-1'>Manage vendor contracts and extracted commercial terms</p>
           </div>
-          <Button asChild>
-            <Link href='/contracts/upload'>
-              <Plus className='size-4' />
-              Upload Contract
-            </Link>
-          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={0}>
+                  <Button disabled className='pointer-events-none opacity-50'>
+                    <Plus className='size-4' />
+                    Upload Contract
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>You don&apos;t have permission to upload</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
 
         <Card className='overflow-hidden'>

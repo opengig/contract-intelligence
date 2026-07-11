@@ -1,0 +1,22 @@
+---
+description: Known document ingestion challenges and open questions for ConData client
+alwaysApply: false
+---
+
+# Document Ingestion — Known Challenges
+
+## Solved
+
+- **Multi-row merged headers**: XLSX sheets with 2-4 rows of grouped headers (e.g., "Origin Charges" → "Handling" → "Min/Per kg/Flat"). Now detected and merged into composite column names.
+- **Prose-only sheets**: Cover pages, amendment text, pricing instructions captured as text for metadata extraction.
+- **Sparse sheets**: Small tables (1-2 rows like "Forwarder Discount") now stored as both text AND table records.
+- **Numeric precision**: `raw: true` preserves exact values (0.2375 not 0.24).
+- **Shipper identification from RFPs**: Email domains, "will evaluate" language, contact info used to identify buyer.
+- **Effective date vs signing date**: Metadata extraction now prioritizes explicit "Agreement Effective Date" over signature-block dates.
+- **SCAC extraction from table columns**: Actively searches table columns named "SCAC".
+
+## Open — Discuss with Client
+
+- **Location sub-headers in rate sheets**: Sheets like "Dedicated Service" have city names (PALMDALE, etc.) as section dividers between data blocks with identical column structures. Parser doesn't yet inject a "Location" column into each data row.
+- **Documents with NO client/vendor metadata**: Some rate sheets (e.g., Boeing Dedicated Service) contain only pricing data — no company names, dates, or signatures. Upload flow should allow user to assign client/vendor at upload time.
+- **European number formatting**: Some sheets use period as thousands separator and comma as decimal separator (e.g., US$1.874,25). `raw: true` handles this, but display/export may need locale awareness.

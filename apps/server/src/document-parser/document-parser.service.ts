@@ -15,6 +15,8 @@ interface AdiTable {
   headers: string[];
   rows: string[][];
   pageNumbers: number[];
+  /** Preceding markdown text (up to 8 lines) — may contain section headings */
+  contextBefore: string;
 }
 
 export interface OcrResult {
@@ -69,6 +71,15 @@ const tableGroupSchema = z.object({
         .describe(
           '1-2 sentences: what data does this table contain? Mention key columns, routes, or metrics.',
         ),
+      sectionHeading: z
+        .string()
+        .nullable()
+        .describe(
+          'The parent section or service-level heading this table falls under, extracted from the ' +
+            'CONTEXT BEFORE TABLE text. Examples: "LTL Domestic Priority", "LTL Domestic Economy", ' +
+            '"LTL International Priority", "Budapest → Tokyo Narita". ' +
+            'null if no clear section heading is found in the context.',
+        ),
     }),
   ),
 });
@@ -78,6 +89,33 @@ const proseCleanupSchema = z.object({
     .string()
     .describe(
       'The ORIGINAL document text verbatim — only structural fixes applied. Never summarize or paraphrase.',
+    ),
+});
+
+const xlsxMetadataSchema = z.object({
+  name: z
+    .string()
+    .describe(
+      'Descriptive name for this sheet based on its content (e.g. "Ecolab LTL Primary Rate Card", "FedEx Domestic Priority Discount Table")',
+    ),
+  summary: z
+    .string()
+    .describe(
+      '1-2 sentences: what data does this sheet contain? Mention client, vendor/carrier, transport mode, service type, and key columns.',
+    ),
+  client: z
+    .string()
+    .nullable()
+    .describe('Client/shipper name if identifiable from the data'),
+  vendor: z
+    .string()
+    .nullable()
+    .describe('Vendor/carrier name if identifiable from the data'),
+  serviceSection: z
+    .string()
+    .nullable()
+    .describe(
+      'Service section or tier if identifiable (e.g. "LTL Domestic Priority", "LTL Domestic Economy"). null if not applicable.',
     ),
 });
 
@@ -368,7 +406,7 @@ export class DocumentParserService {
     }
     const text = textParts.join('\n');
 
-    return { text, headers, rows, pageNumbers };
+    return { text, headers, rows, pageNumbers, contextBefore };
   }
 
   // ── Phase 2: LLM table grouping (merge + name + summarize) ─────────
@@ -429,13 +467,25 @@ export class DocumentParserService {
               .filter((gi) => gi < rawTables.length)
               .map((gi) => rawTables[gi]);
 
-            const mergedHeaders = sourceTables[0]?.headers ?? [];
-            const mergedRows = sourceTables.flatMap((t) => t.rows);
+            const mergedHeaders = [...(sourceTables[0]?.headers ?? [])];
+            let mergedRows = sourceTables.flatMap((t) =>
+              t.rows.map((r) => [...r]),
+            );
             const mergedText = sourceTables.map((t) => t.text).join('\n');
 
+            // Inject section heading as a column so each row carries its context
+            if (entry.sectionHeading) {
+              mergedHeaders.unshift('Service Section');
+              mergedRows = mergedRows.map((r) => [entry.sectionHeading!, ...r]);
+            }
+
             allNamed.push({
-              name: entry.name,
-              summary: entry.summary,
+              name: entry.sectionHeading
+                ? `${entry.sectionHeading} — ${entry.name}`
+                : entry.name,
+              summary: entry.sectionHeading
+                ? `[${entry.sectionHeading}] ${entry.summary}`
+                : entry.summary,
               headers: mergedHeaders,
               rows: mergedRows,
               textContent: mergedText,
@@ -630,12 +680,21 @@ export class DocumentParserService {
     return result;
   }
 
-  private async nameTableGroup(
-    tables: AdiTable[],
-  ): Promise<{ localIndices: number[]; name: string; summary: string }[]> {
+  private async nameTableGroup(tables: AdiTable[]): Promise<
+    {
+      localIndices: number[];
+      name: string;
+      summary: string;
+      sectionHeading: string | null;
+    }[]
+  > {
     const MAX_ROW_CHARS = 2000;
     const prompt = tables
       .map((t, i) => {
+        const contextLine = t.contextBefore
+          ? `CONTEXT BEFORE TABLE:\n${t.contextBefore}\n\n`
+          : '';
+
         // Always include ALL column headers — they're critical for naming
         const headerLine = `COLUMNS (${t.headers.length}): ${t.headers.map((h) => `"${h}"`).join(', ')}`;
 
@@ -651,13 +710,13 @@ export class DocumentParserService {
 
         return (
           `--- Table ${i} (page ${t.pageNumbers.join(',') || '?'}, ${t.rows.length} rows, ${t.headers.length} columns) ---\n` +
-          `${headerLine}\n\nSAMPLE ROWS:\n${truncatedRows}`
+          `${contextLine}${headerLine}\n\nSAMPLE ROWS:\n${truncatedRows}`
         );
       })
       .join('\n\n');
 
     const { object } = await generateObject({
-      model: openai('gpt-4.1'),
+      model: openai('gpt-5.2'),
       system:
         'You receive a group of consecutive tables extracted from a logistic contract PDF.\n\n' +
         'Your job:\n' +
@@ -667,7 +726,14 @@ export class DocumentParserService {
         '   - Rate/price/tariff columns (e.g. freight rates per kg by weight slab)\n' +
         '   - Route/lane identifiers\n' +
         '   - Cost breakdowns (pre-carriage, handling, destination charges)\n' +
-        '   - If the table has rate columns like "+300 kg", "+500 kg" etc., mention "includes freight rates by weight slab" in the summary.\n\n' +
+        '   - If the table has rate columns like "+300 kg", "+500 kg" etc., mention "includes freight rates by weight slab" in the summary.\n' +
+        '4. Extract the parent section/service heading from the CONTEXT BEFORE TABLE if present.\n' +
+        '   In LTL freight contracts, tables are grouped under service-tier headings like ' +
+        '   "LTL Domestic Priority", "LTL Domestic Economy", "LTL International Priority".\n' +
+        '   These headings appear in the text ABOVE the table. Extract the heading as sectionHeading.\n' +
+        '   For other contracts it may be a route heading (e.g. "Budapest → Tokyo Narita").\n' +
+        '   CRITICAL: Two tables with identical columns but different section headings are NOT the same table — ' +
+        '   do NOT merge them. They represent different service tiers or categories.\n\n' +
         'IMPORTANT: Read ALL column names carefully. Tables often contain rate/pricing data hidden in later columns ' +
         '(e.g. "applicable rates – FREIGHT RATES +300 kg in currency"). The name and summary MUST reflect this.\n\n' +
         'For originalIndices: use the 0-based index within this group. If tables 0 and 1 should be merged, return [0,1].\n' +
@@ -680,6 +746,7 @@ export class DocumentParserService {
       localIndices: t.originalIndices,
       name: t.name,
       summary: t.summary,
+      sectionHeading: t.sectionHeading ?? null,
     }));
   }
 
@@ -718,6 +785,125 @@ export class DocumentParserService {
         }
       }
     }
+  }
+
+  // ── XLSX metadata enrichment via LLM ────────────────────────────────────
+
+  /**
+   * Enrich XLSX-sourced tables with LLM-generated names, summaries, and metadata.
+   * Samples rows spread across the sheet so the LLM can identify client, vendor,
+   * service section, and data type without processing every row.
+   */
+  private async enrichXlsxTables(
+    tables: ExtractedTable[],
+  ): Promise<ExtractedTable[]> {
+    if (tables.length === 0) return tables;
+
+    const enriched: ExtractedTable[] = [];
+
+    for (let i = 0; i < tables.length; i += LLM_CONCURRENCY) {
+      const batch = tables.slice(i, i + LLM_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (table) => {
+          try {
+            const sample = this.sampleXlsxRows(table, 30);
+            const { object } = await generateObject({
+              model: openai('gpt-4.1-mini'),
+              system:
+                'You analyse sheets from logistics/freight contract Excel files. ' +
+                'From the sheet name, pre-header context, column headers, and sample rows, ' +
+                'identify what this data represents.\n\n' +
+                'Look for: client/shipper name, vendor/carrier name, transport mode (LTL, TL, air, etc.), ' +
+                'service tier (Domestic Priority, Domestic Economy, etc.), rate type, lane structure.\n' +
+                'Give the sheet a clear descriptive name and summary that would help someone find this data.',
+              prompt: sample,
+              schema: xlsxMetadataSchema,
+            });
+
+            let { name, summary } = object;
+            const headers = [...table.headers];
+            let rows = table.rows.map((r) => [...r]);
+
+            if (object.serviceSection) {
+              headers.unshift('Service Section');
+              rows = rows.map((r) => [object.serviceSection!, ...r]);
+              name = `${object.serviceSection} — ${name}`;
+              summary = `[${object.serviceSection}] ${summary}`;
+            }
+
+            return { ...table, name, summary, headers, rows };
+          } catch (err) {
+            this.logger.warn(
+              `XLSX metadata enrichment failed for "${table.name}": ${(err as Error).message}`,
+            );
+            return table;
+          }
+        }),
+      );
+      enriched.push(...results);
+    }
+
+    return enriched;
+  }
+
+  /**
+   * Build a text sample of an XLSX table for LLM analysis.
+   * Takes rows spread evenly across the sheet (start, middle, end)
+   * so the LLM sees representative data without processing everything.
+   */
+  private sampleXlsxRows(table: ExtractedTable, maxRows: number): string {
+    const parts: string[] = [];
+
+    // Include pre-header context from textContent if present
+    const textLines = table.textContent.split('\n');
+    const headerLine = table.headers.join(' | ');
+    const headerIdx = textLines.findIndex((l) => l.includes(headerLine));
+    if (headerIdx > 0) {
+      parts.push('PRE-HEADER CONTEXT:', ...textLines.slice(0, headerIdx), '');
+    }
+
+    parts.push(`SHEET: ${table.name}`);
+    parts.push(
+      `COLUMNS (${table.headers.length}): ${table.headers.map((h) => `"${h}"`).join(', ')}`,
+    );
+    parts.push(`TOTAL ROWS: ${table.rows.length}`);
+    parts.push('');
+
+    // Sample rows spread across the sheet: first 10, middle 10, last 10
+    const rows = table.rows;
+    const indices: number[] = [];
+
+    const firstN = Math.min(10, rows.length);
+    for (let i = 0; i < firstN; i++) indices.push(i);
+
+    if (rows.length > 20) {
+      const midStart = Math.floor(rows.length / 2) - 5;
+      for (let i = midStart; i < midStart + 10 && i < rows.length; i++) {
+        if (!indices.includes(i)) indices.push(i);
+      }
+    }
+
+    if (rows.length > 10) {
+      const lastStart = Math.max(rows.length - 10, firstN);
+      for (let i = lastStart; i < rows.length; i++) {
+        if (!indices.includes(i)) indices.push(i);
+      }
+    }
+
+    indices.sort((a, b) => a - b);
+    const sampled = indices.slice(0, maxRows);
+
+    parts.push('SAMPLE ROWS:');
+    let prevIdx = -1;
+    for (const idx of sampled) {
+      if (prevIdx >= 0 && idx > prevIdx + 1) {
+        parts.push(`  ... (${idx - prevIdx - 1} rows omitted) ...`);
+      }
+      parts.push(`  [row ${idx}] ${rows[idx].join(' | ')}`);
+      prevIdx = idx;
+    }
+
+    return parts.join('\n');
   }
 
   // ── Phase 3: LLM prose cleanup ─────────────────────────────────────────
@@ -815,18 +1001,31 @@ export class DocumentParserService {
     /^changelog$/i,
   ];
 
-  extractFromXlsx(filePath: string): ParseResult {
+  private cellToString(c: unknown): string {
+    if (c instanceof Date) {
+      const y = c.getFullYear();
+      const m = String(c.getMonth() + 1).padStart(2, '0');
+      const d = String(c.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    return String(c ?? '').trim();
+  }
+
+  async extractFromXlsx(filePath: string): Promise<ParseResult> {
     this.logger.log(`Parsing XLSX: ${filePath}`);
 
-    // cellDates: false — keep dates as numeric serials (no JS Date objects).
-    // dateNF: 'yyyy-mm-dd' — override date format so SSF outputs ISO dates.
-    // raw: false goes on sheet_to_json (not here) to trigger SSF formatting.
+    // cellDates: true converts date serials to JS Date objects so that
+    // raw: true on sheet_to_json can preserve full numeric precision while
+    // dates are still recognized as Date objects (formatted in row processing).
     const workbook = XLSX.readFile(filePath, {
-      cellDates: false,
-      dateNF: 'yyyy-mm-dd',
+      cellDates: true,
     });
     const tables: ExtractedTable[] = [];
     const textParts: string[] = [];
+
+    this.logger.log(
+      `  All sheets: ${workbook.SheetNames.map((s) => `"${s}"`).join(', ')}`,
+    );
 
     for (const sheetName of workbook.SheetNames) {
       const isNonData = DocumentParserService.SKIP_SHEET_PATTERNS.some((p) =>
@@ -838,86 +1037,250 @@ export class DocumentParserService {
       }
 
       const sheet = workbook.Sheets[sheetName];
-      // raw: false — SSF formats every cell including date serials.
-      // With cellDates:false + dateNF:'yyyy-mm-dd', SSF uses pure arithmetic
-      // (no JS Date) to convert serials → "2022-03-14". Zero timezone risk.
+      // raw: true preserves full numeric precision (e.g. 0.2375 stays 0.2375
+      // instead of being formatted to "0.24" by the cell's number format).
+      // Date serials are already converted to Date objects by readFile's
+      // cellDates: true, and formatted to YYYY-MM-DD in row processing below.
       const rows: unknown[][] = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
         header: 1,
         defval: '',
         blankrows: false,
-        raw: false,
+        raw: true,
       });
 
-      // Skip sheets with too few rows to contain meaningful data (header + at least 2 data rows)
+      // Sparse sheets (< 3 rows): capture as prose text AND create a minimal
+      // table record so the AI agent can discover them via listTables.
       if (rows.length < 3) {
+        const sparseRows = rows
+          .map((r) => (r as unknown[]).map((c) => this.cellToString(c)))
+          .filter((r) => r.some((c) => c !== ''));
+
+        if (sparseRows.length === 0) {
+          this.logger.log(
+            `  Skipping empty sheet: "${sheetName}" (${rows.length} rows)`,
+          );
+          continue;
+        }
+
+        const sparseText = sparseRows
+          .map((r) => r.filter(Boolean).join(' '))
+          .join('\n');
+        textParts.push(`Sheet: ${sheetName}\n${sparseText}`);
+
+        // Build a minimal table: use the widest row as a guide for columns
+        const maxCols = Math.max(...sparseRows.map((r) => r.length));
+        const colHeaders = sparseRows[0]
+          .slice(0, maxCols)
+          .map((c, i) => c || `Column ${i + 1}`);
+        const dataRows =
+          sparseRows.length > 1 ? sparseRows.slice(1) : sparseRows;
+
+        tables.push({
+          name: sheetName,
+          summary: `Small sheet "${sheetName}" with ${dataRows.length} row(s). Content: ${sparseText.slice(0, 200)}`,
+          headers: colHeaders,
+          rows: dataRows.map((r) => r.slice(0, maxCols)),
+          textContent: `Sheet: ${sheetName}\n${sparseText}`,
+        });
+
         this.logger.log(
-          `  Skipping sparse sheet: "${sheetName}" (${rows.length} rows)`,
+          `  Sheet "${sheetName}": sparse (${sparseRows.length} rows), captured as text + table`,
         );
         continue;
       }
 
-      // Find first non-empty row to use as headers
-      const headerRowIdx = rows.findIndex((r) =>
-        r.some((cell) => cell !== null && cell !== undefined && cell !== ''),
-      );
-      if (headerRowIdx === -1) continue;
+      // Capture pre-header rows as metadata context (service section, client, dates, etc.)
+      // These rows often contain labels like "LTL Domestic Priority", "Ecolab", "Effective: 04/29/2024"
+      const headerRowIdx = rows.findIndex((r) => {
+        const nonEmpty = r.filter(
+          (cell) => cell !== null && cell !== undefined && cell !== '',
+        );
+        return nonEmpty.length >= 3;
+      });
 
-      const rawHeaders = rows[headerRowIdx].map((h) => String(h ?? '').trim());
+      // Prose-only sheet (no row with 3+ cells): capture all text as prose content.
+      // These sheets often contain critical metadata (client name, vendor, dates, amendment text).
+      if (headerRowIdx === -1) {
+        const sheetText = rows
+          .map((r) =>
+            r
+              .map((c) => this.cellToString(c))
+              .filter(Boolean)
+              .join(' '),
+          )
+          .filter(Boolean)
+          .join('\n');
+
+        if (sheetText.trim()) {
+          textParts.push(`Sheet: ${sheetName}\n${sheetText}`);
+          this.logger.log(
+            `  Sheet "${sheetName}": prose-only (${sheetText.length} chars), captured as text`,
+          );
+        }
+        continue;
+      }
+
+      const preHeaderContext = rows
+        .slice(0, headerRowIdx)
+        .map((r) =>
+          r
+            .map((c) => this.cellToString(c))
+            .filter(Boolean)
+            .join(' | '),
+        )
+        .filter(Boolean)
+        .join('\n');
+
+      // Detect multi-row headers (common in logistics/financial spreadsheets).
+      // Continuation header rows contain only strings (no numbers) and look
+      // like sub-labels ("Min", "Per kg", "Flat") rather than data.
+      let headerEndIdx = headerRowIdx;
+      for (let ri = headerRowIdx + 1; ri < rows.length; ri++) {
+        const cells = rows[ri] as unknown[];
+        const nonEmpty = cells.filter(
+          (c) => c !== null && c !== undefined && c !== '',
+        );
+        if (nonEmpty.length === 0) break;
+        const hasNumeric = nonEmpty.some(
+          (c) => typeof c === 'number' || c instanceof Date,
+        );
+        if (hasNumeric) break;
+        const allShortStrings = nonEmpty.every(
+          (c) => typeof c === 'string' && c.length < 150,
+        );
+        if (!allShortStrings) break;
+        headerEndIdx = ri;
+      }
+
+      // Merge header rows: for each column, join non-empty values across rows.
+      // Forward-fill group headers so sub-columns inherit the parent label.
+      const headerRows = rows.slice(headerRowIdx, headerEndIdx + 1);
+      const maxCol = Math.max(...headerRows.map((r) => r.length));
+
+      const filled: string[][] = headerRows.map((r) => {
+        const row = (r as unknown[])
+          .slice(0, maxCol)
+          .map((c) => this.cellToString(c));
+        // Forward-fill: carry the last non-empty value rightward within this row
+        let last = '';
+        return row.map((v) => {
+          if (v !== '') last = v;
+          return last;
+        });
+      });
+
+      const mergedHeaders: string[] = [];
+      for (let c = 0; c < maxCol; c++) {
+        const parts: string[] = [];
+        for (const frow of filled) {
+          const v = (frow[c] ?? '').trim();
+          if (v && !parts.includes(v)) parts.push(v);
+        }
+        mergedHeaders.push(parts.join(' — '));
+      }
+
       // Drop trailing empty headers
-      const lastNonEmpty = rawHeaders.reduceRight(
+      const lastNonEmpty = mergedHeaders.reduceRight(
         (acc, h, i) => (acc === -1 && h !== '' ? i : acc),
         -1,
       );
       const headers =
-        lastNonEmpty >= 0 ? rawHeaders.slice(0, lastNonEmpty + 1) : rawHeaders;
+        lastNonEmpty >= 0
+          ? mergedHeaders.slice(0, lastNonEmpty + 1)
+          : mergedHeaders;
 
       if (headers.length === 0) continue;
 
       const colCount = headers.length;
 
+      if (headerEndIdx > headerRowIdx) {
+        this.logger.log(
+          `  Sheet "${sheetName}": merged ${headerEndIdx - headerRowIdx + 1} header rows`,
+        );
+      }
+
       // Data rows — skip rows that are entirely empty
       const dataRows = rows
-        .slice(headerRowIdx + 1)
-        .map((r) =>
-          r.slice(0, colCount).map((c) => {
-            // With cellDates:false + raw:false, xlsx's SSF formats date serials
-            // using pure arithmetic (no JS Date), so this branch is never
-            // reached. Kept as a safety net if cellDates:true is ever re-enabled.
-            if (c instanceof Date) {
-              const y = c.getFullYear();
-              const m = String(c.getMonth() + 1).padStart(2, '0');
-              const d = String(c.getDate()).padStart(2, '0');
-              return `${y}-${m}-${d}`;
-            }
-            return String(c ?? '').trim();
-          }),
-        )
+        .slice(headerEndIdx + 1)
+        .map((r) => r.slice(0, colCount).map((c) => this.cellToString(c)))
         .filter((r) => r.some((c) => c !== ''));
 
       if (dataRows.length === 0) continue;
 
+      // Separate prose-like rows from structured data rows.
+      // Prose rows have text concentrated in 1-2 cells (descriptions, methodology,
+      // formulas, signature blocks). These should be searchable as text, not table data.
+      const structuredRows: string[][] = [];
+      const proseLines: string[] = [];
+
+      for (const row of dataRows) {
+        const nonEmpty = row.filter((c) => c !== '');
+        const longCells = row.filter((c) => c.length > 40);
+        const isProse =
+          nonEmpty.length <= 2 &&
+          longCells.length >= 1 &&
+          nonEmpty.length < colCount / 2;
+
+        if (isProse) {
+          proseLines.push(nonEmpty.join(' '));
+        } else {
+          structuredRows.push(row);
+        }
+      }
+
+      // Build prose text for this sheet (pre-header context + extracted prose rows)
+      const sheetProse = [
+        ...(preHeaderContext ? [`Sheet: ${sheetName}`, preHeaderContext] : []),
+        ...proseLines,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      if (sheetProse) {
+        textParts.push(sheetProse);
+      }
+
+      // Skip table creation if no structured rows remain
+      if (structuredRows.length === 0) {
+        this.logger.log(
+          `  Sheet "${sheetName}": all ${dataRows.length} rows are prose, no table created`,
+        );
+        continue;
+      }
+
       // Dedup only for text representation, keep original rows for DB
-      const textRows = dataRows.map((r) => [...r]);
+      const textRows = structuredRows.map((r) => [...r]);
       this.deduplicateDominantValues(textRows);
 
       const tableText = [
         `Sheet: ${sheetName}`,
+        ...(preHeaderContext ? [preHeaderContext] : []),
         headers.join(' | '),
         ...textRows.map((r) => r.join(' | ')),
       ].join('\n');
 
       textParts.push(tableText);
 
+      const tableName = preHeaderContext
+        ? `${sheetName} — ${preHeaderContext.split('\n')[0].slice(0, 100)}`
+        : sheetName;
+      const summaryPrefix = preHeaderContext
+        ? `[${preHeaderContext.split('\n').join('; ')}] `
+        : '';
+
       tables.push({
-        name: sheetName,
-        summary: `Sheet "${sheetName}" with ${dataRows.length} rows and columns: ${headers.slice(0, 8).join(', ')}${headers.length > 8 ? '…' : ''}.`,
+        name: tableName,
+        summary: `${summaryPrefix}Sheet "${sheetName}" with ${structuredRows.length} rows and columns: ${headers.slice(0, 8).join(', ')}${headers.length > 8 ? '…' : ''}.`,
         headers,
-        rows: dataRows,
+        rows: structuredRows,
         textContent: tableText,
       });
 
+      const proseNote = proseLines.length
+        ? ` (${proseLines.length} prose rows extracted separately)`
+        : '';
       this.logger.log(
-        `  Sheet "${sheetName}": ${headers.length} cols, ${dataRows.length} rows`,
+        `  Sheet "${sheetName}": ${headers.length} cols, ${structuredRows.length} data rows${proseNote}`,
       );
     }
 
@@ -926,10 +1289,16 @@ export class DocumentParserService {
       `XLSX parsed: ${tables.length} sheet(s), ${text.length} chars`,
     );
 
+    // Enrich tables with LLM-generated names, summaries, and metadata
+    const enrichedTables = await this.enrichXlsxTables(tables);
+    this.logger.log(
+      `XLSX enrichment complete: ${enrichedTables.length} table(s)`,
+    );
+
     return {
       text,
-      tables,
-      isTableDocument: tables.length > 0,
+      tables: enrichedTables,
+      isTableDocument: enrichedTables.length > 0,
     };
   }
 }
